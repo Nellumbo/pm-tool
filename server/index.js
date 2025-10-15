@@ -6,6 +6,7 @@ const { v4: uuidv4 } = require('uuid');
 const moment = require('moment');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const Database = require('./database');
 
 // Загружаем переменные окружения
 require('dotenv').config();
@@ -75,10 +76,8 @@ const logAction = (action) => {
   };
 };
 
-// In-memory storage (в реальном приложении используйте базу данных)
-let projects = [];
-let tasks = [];
-let comments = [];
+// Инициализация базы данных
+const db = new Database();
 
 // Добавляем тестовые данные
 projects = [
