@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const moment = require('moment');
 const jwt = require('jsonwebtoken');
@@ -17,6 +18,11 @@ const JWT_SECRET = process.env.JWT_SECRET || 'demo-secret-key-change-in-producti
 app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+
+// Раздача статических файлов React приложения
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, '../client/build')));
+}
 
 // Middleware для проверки JWT токена
 const authenticateToken = (req, res, next) => {
@@ -953,6 +959,13 @@ app.get('/api/stats', (req, res) => {
     }
   });
 });
+
+// Маршрут для React приложения (должен быть последним)
+if (process.env.NODE_ENV === 'production') {
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../client/build', 'index.html'));
+  });
+}
 
 app.listen(PORT, () => {
   console.log(`Сервер запущен на порту ${PORT}`);

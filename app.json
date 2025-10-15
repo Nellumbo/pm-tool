@@ -1,0 +1,41 @@
+{
+  "name": "PM Tool - Project Management System",
+  "description": "Modern Project Management System with React + Node.js",
+  "repository": "https://github.com/Nellumbo/pm-tool",
+  "logo": "https://via.placeholder.com/150x150/007bff/ffffff?text=PM+Tool",
+  "keywords": [
+    "project-management",
+    "react",
+    "nodejs",
+    "express",
+    "jwt",
+    "kanban",
+    "analytics"
+  ],
+  "stack": "heroku-20",
+  "buildpacks": [
+    {
+      "url": "heroku/nodejs"
+    }
+  ],
+  "env": {
+    "NODE_ENV": {
+      "description": "Environment for the application",
+      "value": "production"
+    },
+    "JWT_SECRET": {
+      "description": "Secret key for JWT tokens",
+      "generator": "secret"
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "free"
+    }
+  },
+  "addons": [],
+  "scripts": {
+    "postdeploy": "echo 'Deployment completed successfully!'"
+  }
+}
