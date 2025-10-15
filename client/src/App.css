@@ -1,0 +1,153 @@
+.app {
+  display: flex;
+  height: 100vh;
+  background-color: #f5f7fa;
+}
+
+.sidebar {
+  width: 250px;
+  background-color: #2c3e50;
+  color: white;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-header {
+  padding: 20px;
+  border-bottom: 1px solid #34495e;
+}
+
+.sidebar-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.nav-menu {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  flex: 1;
+}
+
+.nav-item {
+  margin: 0;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  padding: 15px 20px;
+  color: #bdc3c7;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  border-left: 3px solid transparent;
+}
+
+.nav-link:hover {
+  background-color: #34495e;
+  color: white;
+}
+
+.nav-link.active {
+  background-color: #3498db;
+  color: white;
+  border-left-color: #2980b9;
+}
+
+.nav-link svg {
+  margin-right: 12px;
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.header {
+  background-color: white;
+  border-bottom: 1px solid #e1e8ed;
+  padding: 0 30px;
+  height: 70px;
+  display: flex;
+  align-items: center;
+}
+
+.header-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.header-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.content {
+  flex: 1;
+  padding: 30px;
+  overflow-y: auto;
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    width: 200px;
+  }
+  
+  .sidebar-header h2 {
+    font-size: 16px;
+  }
+  
+  .nav-link span {
+    display: none;
+  }
+  
+  .content {
+    padding: 20px;
+  }
+}
+
+@media (max-width: 600px) {
+  .app {
+    flex-direction: column;
+  }
+  
+  .sidebar {
+    width: 100%;
+    height: auto;
+    flex-direction: row;
+  }
+  
+  .sidebar-header {
+    padding: 15px;
+  }
+  
+  .nav-menu {
+    display: flex;
+    flex: 1;
+  }
+  
+  .nav-item {
+    flex: 1;
+  }
+  
+  .nav-link {
+    justify-content: center;
+    padding: 15px 10px;
+  }
+  
+  .nav-link span {
+    display: none;
+  }
+}

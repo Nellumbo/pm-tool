@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Тест API - Управление Проектами</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f7fa; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .card { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .btn { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; margin: 5px; }
+        .btn:hover { background: #0056b3; }
+        .result { background: #f8f9fa; padding: 10px; border-radius: 4px; margin-top: 10px; white-space: pre-wrap; }
+        .success { color: #28a745; }
+        .error { color: #dc3545; }
+        h1 { color: #2c3e50; }
+        h2 { color: #34495e; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Тест API - Управление Проектами</h1>
+        
+        <div class="card">
+            <h2>📊 Статистика</h2>
+            <button class="btn" onclick="getStats()">Получить статистику</button>
+            <div id="stats" class="result"></div>
+        </div>
+
+        <div class="card">
+            <h2>📁 Проекты</h2>
+            <button class="btn" onclick="getProjects()">Получить проекты</button>
+            <button class="btn" onclick="createProject()">Создать тестовый проект</button>
+            <div id="projects" class="result"></div>
+        </div>
+
+        <div class="card">
+            <h2>✅ Задачи</h2>
+            <button class="btn" onclick="getTasks()">Получить задачи</button>
+            <button class="btn" onclick="createTask()">Создать тестовую задачу</button>
+            <div id="tasks" class="result"></div>
+        </div>
+
+        <div class="card">
+            <h2>👥 Пользователи</h2>
+            <button class="btn" onclick="getUsers()">Получить пользователей</button>
+            <div id="users" class="result"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000/api';
+
+        async function makeRequest(endpoint, method = 'GET', data = null) {
+            try {
+                const options = {
+                    method,
+                    headers: { 'Content-Type': 'application/json' }
+                };
+                if (data) options.body = JSON.stringify(data);
+                
+                const response = await fetch(`${API_BASE}${endpoint}`, options);
+                const result = await response.json();
+                return { success: true, data: result };
+            } catch (error) {
+                return { success: false, error: error.message };
+            }
+        }
+
+        function displayResult(elementId, result) {
+            const element = document.getElementById(elementId);
+            if (result.success) {
+                element.className = 'result success';
+                element.textContent = JSON.stringify(result.data, null, 2);
+            } else {
+                element.className = 'result error';
+                element.textContent = `Ошибка: ${result.error}`;
+            }
+        }
+
+        async function getStats() {
+            const result = await makeRequest('/stats');
+            displayResult('stats', result);
+        }
+
+        async function getProjects() {
+            const result = await makeRequest('/projects');
+            displayResult('projects', result);
+        }
+
+        async function createProject() {
+            const projectData = {
+                name: 'Тестовый проект',
+                description: 'Это тестовый проект для проверки API',
+                status: 'active',
+                startDate: new Date().toISOString().split('T')[0],
+                endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+            };
+            const result = await makeRequest('/projects', 'POST', projectData);
+            displayResult('projects', result);
+            if (result.success) getProjects(); // Обновить список
+        }
+
+        async function getTasks() {
+            const result = await makeRequest('/tasks');
+            displayResult('tasks', result);
+        }
+
+        async function createTask() {
+            // Сначала получим проекты, чтобы создать задачу
+            const projectsResult = await makeRequest('/projects');
+            if (!projectsResult.success || projectsResult.data.length === 0) {
+                displayResult('tasks', { success: false, error: 'Сначала создайте проект' });
+                return;
+            }
+
+            const taskData = {
+                title: 'Тестовая задача',
+                description: 'Это тестовая задача для проверки API',
+                priority: 'medium',
+                status: 'todo',
+                projectId: projectsResult.data[0].id,
+                dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+            };
+            const result = await makeRequest('/tasks', 'POST', taskData);
+            displayResult('tasks', result);
+            if (result.success) getTasks(); // Обновить список
+        }
+
+        async function getUsers() {
+            const result = await makeRequest('/users');
+            displayResult('users', result);
+        }
+
+        // Автоматически загрузить статистику при загрузке страницы
+        window.onload = function() {
+            getStats();
+            getUsers();
+        };
+    </script>
+</body>
+</html>
