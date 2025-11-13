@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Users, Plus, Edit, Trash2, Shield, UserCheck, Code, Settings } from 'lucide-react';
+import Loading, { ButtonLoading } from './Loading';
+import FormError, { FieldError } from './FormError';
+import { validateUserForm } from '../utils/validation';
 
 const UserManagement = () => {
   const [users, setUsers] = useState([]);
@@ -7,6 +10,8 @@ const UserManagement = () => {
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [currentRole, setCurrentRole] = useState('developer');
+  const [formErrors, setFormErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -45,11 +50,22 @@ const UserManagement = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
+
+    // Валидация формы
+    const { valid, errors } = validateUserForm(formData, !!editingUser);
+
+    if (!valid) {
+      setFormErrors(errors);
+      return;
+    }
+
+    setIsSubmitting(true);
+    setFormErrors({});
+
     try {
       const url = editingUser ? `/api/users/${editingUser.id}` : '/api/users';
       const method = editingUser ? 'PUT' : 'POST';
-      
+
       const response = await fetch(url, {
         method,
         credentials: 'include',
@@ -63,6 +79,7 @@ const UserManagement = () => {
         await fetchUsers();
         setShowModal(false);
         setEditingUser(null);
+        setFormErrors({});
         setFormData({
           name: '',
           email: '',
@@ -72,11 +89,13 @@ const UserManagement = () => {
         });
       } else {
         const error = await response.json();
-        alert(error.message || 'Ошибка сохранения пользователя');
+        setFormErrors({ submit: error.message || 'Ошибка сохранения пользователя' });
       }
     } catch (error) {
       console.error('Ошибка сохранения пользователя:', error);
-      alert('Ошибка сохранения пользователя');
+      setFormErrors({ submit: 'Ошибка сохранения пользователя' });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -153,7 +172,7 @@ const UserManagement = () => {
   };
 
   if (loading) {
-    return <div className="loading">Загрузка пользователей...</div>;
+    return <Loading text="Загрузка пользователей..." />;
   }
 
   return (
@@ -291,27 +310,47 @@ const UserManagement = () => {
             </div>
             
             <form onSubmit={handleSubmit}>
+              {formErrors.submit && <FormError error={formErrors.submit} onDismiss={() => setFormErrors({})} />}
+
               <div className="form-group">
                 <label>Имя</label>
                 <input
                   type="text"
-                  className="form-control"
+                  className={`form-control ${formErrors.name ? 'error' : ''}`}
                   value={formData.name}
                   onChange={(e) => setFormData({...formData, name: e.target.value})}
                   required
                 />
+                <FieldError error={formErrors.name} />
               </div>
-              
+
               <div className="form-group">
                 <label>Email</label>
                 <input
                   type="email"
-                  className="form-control"
+                  className={`form-control ${formErrors.email ? 'error' : ''}`}
                   value={formData.email}
                   onChange={(e) => setFormData({...formData, email: e.target.value})}
                   required
                 />
+                <FieldError error={formErrors.email} />
               </div>
+
+              {!editingUser && (
+                <div className="form-group">
+                  <label>Пароль</label>
+                  <input
+                    type="password"
+                    className={`form-control ${formErrors.password ? 'error' : ''}`}
+                    value={formData.password || ''}
+                    onChange={(e) => setFormData({...formData, password: e.target.value})}
+                    placeholder="Введите пароль"
+                    required={!editingUser}
+                  />
+                  <FieldError error={formErrors.password} />
+                  <small className="text-muted">Минимум 6 символов</small>
+                </div>
+              )}
               
               <div className="form-group">
                 <label>Роль</label>
@@ -357,8 +396,12 @@ const UserManagement = () => {
                 >
                   Отмена
                 </button>
-                <button type="submit" className="btn btn-primary">
-                  {editingUser ? 'Сохранить' : 'Создать'}
+                <button type="submit" className="btn btn-primary" disabled={isSubmitting}>
+                  {isSubmitting ? (
+                    <ButtonLoading text={editingUser ? 'Сохранение...' : 'Создание...'} />
+                  ) : (
+                    editingUser ? 'Сохранить' : 'Создать'
+                  )}
                 </button>
               </div>
             </form>

@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { LogIn, UserPlus, Eye, EyeOff, Shield, UserCheck, Code } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { ButtonLoading } from './Loading';
+import FormError, { FieldError } from './FormError';
+import { validateEmail, validatePassword, validateUserForm } from '../utils/validation';
 
 const Auth = () => {
   const { login } = useAuth();
@@ -8,6 +11,7 @@ const Auth = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [formErrors, setFormErrors] = useState({});
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -21,10 +25,36 @@ const Auth = () => {
     e.preventDefault();
     setLoading(true);
     setError('');
+    setFormErrors({});
+
+    // Валидация для входа
+    if (isLogin) {
+      const emailValidation = validateEmail(formData.email);
+      const passwordValidation = validatePassword(formData.password);
+
+      const errors = {};
+      if (!emailValidation.valid) errors.email = emailValidation.error;
+      if (!passwordValidation.valid) errors.password = passwordValidation.error;
+
+      if (Object.keys(errors).length > 0) {
+        setFormErrors(errors);
+        setLoading(false);
+        return;
+      }
+    } else {
+      // Валидация для регистрации
+      const { valid, errors } = validateUserForm(formData, false);
+
+      if (!valid) {
+        setFormErrors(errors);
+        setLoading(false);
+        return;
+      }
+    }
 
     try {
       const url = isLogin ? '/api/auth/login' : '/api/auth/register';
-      const body = isLogin 
+      const body = isLogin
         ? { email: formData.email, password: formData.password }
         : formData;
 
@@ -110,6 +140,8 @@ const Auth = () => {
         </div>
 
         <form onSubmit={handleSubmit} className="auth-form">
+          {error && <FormError error={error} onDismiss={() => setError('')} />}
+
           {!isLogin && (
             <div className="form-group">
               <label>Имя</label>
@@ -119,9 +151,10 @@ const Auth = () => {
                 value={formData.name}
                 onChange={handleInputChange}
                 required={!isLogin}
-                className="form-control"
+                className={`form-control ${formErrors.name ? 'error' : ''}`}
                 placeholder="Введите ваше имя"
               />
+              <FieldError error={formErrors.name} />
             </div>
           )}
 
@@ -133,9 +166,10 @@ const Auth = () => {
               value={formData.email}
               onChange={handleInputChange}
               required
-              className="form-control"
+              className={`form-control ${formErrors.email ? 'error' : ''}`}
               placeholder="Введите email"
             />
+            <FieldError error={formErrors.email} />
           </div>
 
           <div className="form-group">
@@ -147,7 +181,7 @@ const Auth = () => {
                 value={formData.password}
                 onChange={handleInputChange}
                 required
-                className="form-control"
+                className={`form-control ${formErrors.password ? 'error' : ''}`}
                 placeholder="Введите пароль"
               />
               <button
@@ -158,6 +192,7 @@ const Auth = () => {
                 {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
+            <FieldError error={formErrors.password} />
           </div>
 
           {!isLogin && (
@@ -177,7 +212,7 @@ const Auth = () => {
               </div>
 
               <div className="form-group">
-                <label>Отдел</label>
+                <label>Отдел (необязательно)</label>
                 <input
                   type="text"
                   name="department"
@@ -189,7 +224,7 @@ const Auth = () => {
               </div>
 
               <div className="form-group">
-                <label>Должность</label>
+                <label>Должность (необязательно)</label>
                 <input
                   type="text"
                   name="position"
@@ -202,18 +237,16 @@ const Auth = () => {
             </>
           )}
 
-          {error && (
-            <div className="error-message">
-              {error}
-            </div>
-          )}
-
-          <button 
-            type="submit" 
+          <button
+            type="submit"
             className="btn btn-primary btn-full"
             disabled={loading}
           >
-            {loading ? 'Загрузка...' : (isLogin ? 'Войти' : 'Зарегистрироваться')}
+            {loading ? (
+              <ButtonLoading text={isLogin ? 'Вход...' : 'Регистрация...'} />
+            ) : (
+              isLogin ? 'Войти' : 'Зарегистрироваться'
+            )}
           </button>
         </form>
 
