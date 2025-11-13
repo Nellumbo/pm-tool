@@ -4,7 +4,17 @@ import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import TaskTemplates from './TaskTemplates';
 import BulkActions from './BulkActions';
+import Pagination from './Pagination';
 import useApi from '../hooks/useApi';
+import {
+  TASK_STATUS,
+  TASK_STATUS_LABELS,
+  TASK_STATUS_BADGES,
+  TASK_PRIORITY,
+  TASK_PRIORITY_LABELS,
+  TASK_PRIORITY_CLASSES,
+  DEFAULTS
+} from '../constants';
 
 const Tasks = () => {
   const { get, post, put, delete: deleteApi } = useApi();
@@ -18,11 +28,14 @@ const Tasks = () => {
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterProject, setFilterProject] = useState('all');
   const [selectedTasks, setSelectedTasks] = useState([]);
+  const [pagination, setPagination] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(20);
   const [formData, setFormData] = useState({
     title: '',
     description: '',
-    priority: 'medium',
-    status: 'todo',
+    priority: DEFAULTS.TASK_PRIORITY,
+    status: DEFAULTS.TASK_STATUS,
     projectId: '',
     assigneeId: '',
     dueDate: '',
@@ -31,17 +44,33 @@ const Tasks = () => {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [currentPage, itemsPerPage, filterStatus, filterProject]);
 
   const fetchData = async () => {
     try {
-      const [tasksData, projectsData] = await Promise.all([
-        get('/api/tasks'),
+      // Build query parameters
+      const params = new URLSearchParams({
+        page: currentPage,
+        limit: itemsPerPage
+      });
+
+      if (filterStatus !== 'all') {
+        params.append('status', filterStatus);
+      }
+
+      if (filterProject !== 'all') {
+        params.append('projectId', filterProject);
+      }
+
+      const [tasksResponse, projectsData] = await Promise.all([
+        get(`/api/tasks?${params.toString()}`),
         get('/api/projects')
       ]);
-      
-      setTasks(tasksData);
-      setProjects(projectsData);
+
+      // Handle paginated response
+      setTasks(tasksResponse.tasks || tasksResponse);
+      setPagination(tasksResponse.pagination || null);
+      setProjects(projectsData.projects || projectsData);
       
       let usersData = [];
       try {
@@ -75,8 +104,8 @@ const Tasks = () => {
       setFormData({
         title: '',
         description: '',
-        priority: 'medium',
-        status: 'todo',
+        priority: DEFAULTS.TASK_PRIORITY,
+        status: DEFAULTS.TASK_STATUS,
         projectId: '',
         assigneeId: '',
         dueDate: '',
@@ -137,7 +166,7 @@ const Tasks = () => {
       title: template.name,
       description: template.description,
       priority: template.priority,
-      status: 'todo'
+      status: DEFAULTS.TASK_STATUS
     });
     setShowModal(true);
   };
@@ -243,39 +272,19 @@ const Tasks = () => {
   };
 
   const getStatusBadge = (status) => {
-    const statusMap = {
-      'todo': 'badge-secondary',
-      'in-progress': 'badge-info',
-      'completed': 'badge-success'
-    };
-    return statusMap[status] || 'badge-secondary';
+    return TASK_STATUS_BADGES[status] || 'badge-secondary';
   };
 
   const getStatusText = (status) => {
-    const statusMap = {
-      'todo': 'К выполнению',
-      'in-progress': 'В работе',
-      'completed': 'Завершено'
-    };
-    return statusMap[status] || status;
+    return TASK_STATUS_LABELS[status] || status;
   };
 
   const getPriorityClass = (priority) => {
-    const priorityMap = {
-      'high': 'priority-high',
-      'medium': 'priority-medium',
-      'low': 'priority-low'
-    };
-    return priorityMap[priority] || '';
+    return TASK_PRIORITY_CLASSES[priority] || '';
   };
 
   const getPriorityText = (priority) => {
-    const priorityMap = {
-      'high': 'Высокий',
-      'medium': 'Средний',
-      'low': 'Низкий'
-    };
-    return priorityMap[priority] || priority;
+    return TASK_PRIORITY_LABELS[priority] || priority;
   };
 
   const getProjectName = (projectId) => {
@@ -292,20 +301,33 @@ const Tasks = () => {
 
   const getStatusIcon = (status) => {
     switch (status) {
-      case 'completed':
+      case TASK_STATUS.COMPLETED:
         return <CheckCircle size={16} className="text-success" />;
-      case 'in-progress':
+      case TASK_STATUS.IN_PROGRESS:
         return <Clock size={16} className="text-info" />;
       default:
         return <Circle size={16} className="text-muted" />;
     }
   };
 
-  const filteredTasks = tasks.filter(task => {
-    const statusMatch = filterStatus === 'all' || task.status === filterStatus;
-    const projectMatch = filterProject === 'all' || task.projectId === filterProject;
-    return statusMatch && projectMatch;
-  });
+  // Filtering is now done on the backend, so just use tasks directly
+  const filteredTasks = tasks;
+
+  const handlePageChange = (newPage) => {
+    setCurrentPage(newPage);
+    setSelectedTasks([]); // Clear selection when changing pages
+  };
+
+  const handleLimitChange = (newLimit) => {
+    setItemsPerPage(newLimit);
+    setCurrentPage(1); // Reset to first page when changing limit
+    setSelectedTasks([]);
+  };
+
+  const handleFilterChange = () => {
+    setCurrentPage(1); // Reset to first page when changing filters
+    setSelectedTasks([]);
+  };
 
   if (loading) {
     return <div className="loading">Загрузка задач...</div>;
@@ -341,12 +363,15 @@ const Tasks = () => {
             <select
               className="form-control"
               value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
+              onChange={(e) => {
+                setFilterStatus(e.target.value);
+                handleFilterChange();
+              }}
             >
               <option value="all">Все статусы</option>
-              <option value="todo">К выполнению</option>
-              <option value="in-progress">В работе</option>
-              <option value="completed">Завершено</option>
+              <option value={TASK_STATUS.TODO}>{TASK_STATUS_LABELS[TASK_STATUS.TODO]}</option>
+              <option value={TASK_STATUS.IN_PROGRESS}>{TASK_STATUS_LABELS[TASK_STATUS.IN_PROGRESS]}</option>
+              <option value={TASK_STATUS.COMPLETED}>{TASK_STATUS_LABELS[TASK_STATUS.COMPLETED]}</option>
             </select>
           </div>
 
@@ -355,7 +380,10 @@ const Tasks = () => {
             <select
               className="form-control"
               value={filterProject}
-              onChange={(e) => setFilterProject(e.target.value)}
+              onChange={(e) => {
+                setFilterProject(e.target.value);
+                handleFilterChange();
+              }}
             >
               <option value="all">Все проекты</option>
               {projects.map(project => (
@@ -374,6 +402,7 @@ const Tasks = () => {
                 onClick={() => {
                   setFilterStatus('all');
                   setFilterProject('all');
+                  handleFilterChange();
                 }}
               >
                 Сбросить фильтры
@@ -452,13 +481,13 @@ const Tasks = () => {
                     <button
                       className="status-toggle"
                       onClick={() => {
-                        const newStatus = task.status === 'completed' ? 'todo' : 'completed';
+                        const newStatus = task.status === TASK_STATUS.COMPLETED ? TASK_STATUS.TODO : TASK_STATUS.COMPLETED;
                         handleStatusChange(task.id, newStatus);
                       }}
                     >
                       {getStatusIcon(task.status)}
                     </button>
-                    <h3 className={task.status === 'completed' ? 'completed' : ''}>{task.title}</h3>
+                    <h3 className={task.status === TASK_STATUS.COMPLETED ? 'completed' : ''}>{task.title}</h3>
                   </div>
 
                   <div className="flex flex-gap">
@@ -516,6 +545,17 @@ const Tasks = () => {
             );
           })}
         </div>
+      )}
+
+      {/* Pagination Controls */}
+      {pagination && (
+        <Pagination
+          pagination={pagination}
+          onPageChange={handlePageChange}
+          onLimitChange={handleLimitChange}
+          showLimitSelector={true}
+          limitOptions={[10, 20, 50, 100]}
+        />
       )}
 
       {/* Bulk Actions Bar */}
@@ -585,9 +625,9 @@ const Tasks = () => {
                     value={formData.priority}
                     onChange={(e) => setFormData({...formData, priority: e.target.value})}
                   >
-                    <option value="low">Низкий</option>
-                    <option value="medium">Средний</option>
-                    <option value="high">Высокий</option>
+                    <option value={TASK_PRIORITY.LOW}>{TASK_PRIORITY_LABELS[TASK_PRIORITY.LOW]}</option>
+                    <option value={TASK_PRIORITY.MEDIUM}>{TASK_PRIORITY_LABELS[TASK_PRIORITY.MEDIUM]}</option>
+                    <option value={TASK_PRIORITY.HIGH}>{TASK_PRIORITY_LABELS[TASK_PRIORITY.HIGH]}</option>
                   </select>
                 </div>
                 
@@ -598,9 +638,9 @@ const Tasks = () => {
                     value={formData.status}
                     onChange={(e) => setFormData({...formData, status: e.target.value})}
                   >
-                    <option value="todo">К выполнению</option>
-                    <option value="in-progress">В работе</option>
-                    <option value="completed">Завершено</option>
+                    <option value={TASK_STATUS.TODO}>{TASK_STATUS_LABELS[TASK_STATUS.TODO]}</option>
+                    <option value={TASK_STATUS.IN_PROGRESS}>{TASK_STATUS_LABELS[TASK_STATUS.IN_PROGRESS]}</option>
+                    <option value={TASK_STATUS.COMPLETED}>{TASK_STATUS_LABELS[TASK_STATUS.COMPLETED]}</option>
                   </select>
                 </div>
               </div>

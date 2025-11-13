@@ -11,6 +11,18 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { body, param, query, validationResult } = require('express-validator');
 const Database = require('./database');
+const {
+  USER_ROLES,
+  TASK_STATUS,
+  TASK_PRIORITY,
+  PROJECT_STATUS,
+  HTTP_STATUS,
+  PAGINATION,
+  JWT_CONFIG,
+  COOKIE_OPTIONS,
+  ERROR_MESSAGES,
+  SUCCESS_MESSAGES
+} = require('./constants');
 
 // Загружаем переменные окружения
 require('dotenv').config();
@@ -224,7 +236,7 @@ app.post('/api/auth/login',
       const token = jwt.sign(
         { userId: user.id, email: user.email, role: user.role },
         JWT_SECRET,
-        { expiresIn: '24h' }
+        { expiresIn: JWT_CONFIG.EXPIRES_IN }
       );
 
       // Устанавливаем JWT в httpOnly cookie для защиты от XSS
@@ -232,7 +244,7 @@ app.post('/api/auth/login',
         httpOnly: true, // Недоступен для JavaScript
         secure: process.env.NODE_ENV === 'production', // HTTPS только в production
         sameSite: 'strict', // CSRF защита
-        maxAge: 24 * 60 * 60 * 1000 // 24 часа
+        maxAge: JWT_CONFIG.COOKIE_MAX_AGE
       });
 
       const { password: _, ...userWithoutPassword } = user;
@@ -253,14 +265,14 @@ app.post('/api/auth/register',
     body('name').trim().isLength({ min: 2, max: 100 }).withMessage('Имя должно быть от 2 до 100 символов'),
     body('email').trim().isEmail().normalizeEmail().withMessage('Некорректный email'),
     body('password').isLength({ min: 8, max: 72 }).withMessage('Пароль должен быть от 8 до 72 символов'),
-    body('role').optional().isIn(['admin', 'manager', 'developer']).withMessage('Некорректная роль'),
+    body('role').optional().isIn(Object.values(USER_ROLES)).withMessage('Некорректная роль'),
     body('department').optional().trim().isLength({ max: 100 }).withMessage('Отдел не более 100 символов'),
     body('position').optional().trim().isLength({ max: 100 }).withMessage('Должность не более 100 символов')
   ],
   validate,
   async (req, res) => {
     try {
-      const { name, email, password, role = 'developer', department, position } = req.body;
+      const { name, email, password, role = USER_ROLES.DEVELOPER, department, position } = req.body;
 
       const existingUser = await db.get('SELECT * FROM users WHERE email = ?', [email]);
       if (existingUser) {
@@ -278,7 +290,7 @@ app.post('/api/auth/register',
       const token = jwt.sign(
         { userId, email, role },
         JWT_SECRET,
-        { expiresIn: '24h' }
+        { expiresIn: JWT_CONFIG.EXPIRES_IN }
       );
 
       // Устанавливаем JWT в httpOnly cookie для защиты от XSS
@@ -286,7 +298,7 @@ app.post('/api/auth/register',
         httpOnly: true, // Недоступен для JavaScript
         secure: process.env.NODE_ENV === 'production', // HTTPS только в production
         sameSite: 'strict', // CSRF защита
-        maxAge: 24 * 60 * 60 * 1000 // 24 часа
+        maxAge: JWT_CONFIG.COOKIE_MAX_AGE
       });
 
       const newUser = await db.get('SELECT id, name, email, role, department, position FROM users WHERE id = ?', [userId]);
@@ -322,7 +334,7 @@ app.post('/api/auth/logout', (req, res) => {
 
 app.get('/api/users',
   authenticateToken,
-  checkRole(['admin', 'manager']),
+  checkRole([USER_ROLES.ADMIN, USER_ROLES.MANAGER]),
   async (req, res) => {
     try {
       const users = await db.all('SELECT id, name, email, role, department, position, createdAt FROM users ORDER BY name');
@@ -336,12 +348,12 @@ app.get('/api/users',
 
 app.post('/api/users',
   authenticateToken,
-  checkRole(['admin']),
+  checkRole([USER_ROLES.ADMIN]),
   [
     body('name').trim().isLength({ min: 2, max: 100 }),
     body('email').trim().isEmail().normalizeEmail(),
     body('password').isLength({ min: 8, max: 72 }),
-    body('role').isIn(['admin', 'manager', 'developer'])
+    body('role').isIn(Object.values(USER_ROLES))
   ],
   validate,
   async (req, res) => {
@@ -372,7 +384,7 @@ app.post('/api/users',
 
 app.put('/api/users/:id',
   authenticateToken,
-  checkRole(['admin']),
+  checkRole([USER_ROLES.ADMIN]),
   [
     param('id').isUUID(),
     body('name').optional().trim().isLength({ min: 2, max: 100 }),
@@ -405,7 +417,7 @@ app.put('/api/users/:id',
 
 app.delete('/api/users/:id',
   authenticateToken,
-  checkRole(['admin']),
+  checkRole([USER_ROLES.ADMIN]),
   [param('id').isUUID()],
   validate,
   async (req, res) => {
@@ -431,10 +443,54 @@ app.delete('/api/users/:id',
 app.get('/api/projects',
   authenticateToken,
   apiLimiter,
+  [
+    query('page').optional().isInt({ min: 1 }).toInt(),
+    query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
+    query('status').optional().isIn(Object.values(PROJECT_STATUS)),
+    query('managerId').optional().isUUID()
+  ],
+  validate,
   async (req, res) => {
     try {
-      const projects = await db.all('SELECT * FROM projects ORDER BY createdAt DESC');
-      res.json(projects);
+      const page = req.query.page || PAGINATION.DEFAULT_PAGE;
+      const limit = req.query.limit || PAGINATION.DEFAULT_LIMIT;
+      const offset = (page - 1) * limit;
+
+      // Построение WHERE условий
+      const conditions = [];
+      const params = [];
+
+      if (req.query.status) {
+        conditions.push('status = ?');
+        params.push(req.query.status);
+      }
+
+      if (req.query.managerId) {
+        conditions.push('managerId = ?');
+        params.push(req.query.managerId);
+      }
+
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      // Запрос для подсчета общего количества
+      const countQuery = `SELECT COUNT(*) as total FROM projects ${whereClause}`;
+      const { total } = await db.get(countQuery, params);
+
+      // Запрос для получения данных с пагинацией
+      const dataQuery = `SELECT * FROM projects ${whereClause} ORDER BY createdAt DESC LIMIT ? OFFSET ?`;
+      const projects = await db.all(dataQuery, [...params, limit, offset]);
+
+      res.json({
+        projects,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+          hasNext: page < Math.ceil(total / limit),
+          hasPrev: page > 1
+        }
+      });
     } catch (error) {
       console.error('Ошибка получения проектов:', error.message);
       res.status(500).json({ message: 'Внутренняя ошибка сервера' });
@@ -462,19 +518,19 @@ app.get('/api/projects/:id',
 
 app.post('/api/projects',
   authenticateToken,
-  checkRole(['admin', 'manager']),
+  checkRole([USER_ROLES.ADMIN, USER_ROLES.MANAGER]),
   [
     body('name').trim().isLength({ min: 2, max: 200 }),
     body('description').optional().trim().isLength({ max: 1000 }),
     body('startDate').optional().isISO8601().toDate(),
     body('endDate').optional().isISO8601().toDate(),
-    body('status').optional().isIn(['active', 'completed', 'paused']),
+    body('status').optional().isIn(Object.values(PROJECT_STATUS)),
     body('managerId').optional().isUUID()
   ],
   validate,
   async (req, res) => {
     try {
-      const { name, description, startDate, endDate, status = 'active', managerId } = req.body;
+      const { name, description, startDate, endDate, status = PROJECT_STATUS.ACTIVE, managerId } = req.body;
       const projectId = uuidv4();
 
       await db.run(
@@ -493,7 +549,7 @@ app.post('/api/projects',
 
 app.put('/api/projects/:id',
   authenticateToken,
-  checkRole(['admin', 'manager']),
+  checkRole([USER_ROLES.ADMIN, USER_ROLES.MANAGER]),
   [
     param('id').isUUID(),
     body('name').optional().trim().isLength({ min: 2, max: 200 }),
@@ -534,7 +590,7 @@ app.put('/api/projects/:id',
 
 app.delete('/api/projects/:id',
   authenticateToken,
-  checkRole(['admin']),
+  checkRole([USER_ROLES.ADMIN]),
   [param('id').isUUID()],
   validate,
   async (req, res) => {
@@ -566,20 +622,60 @@ app.delete('/api/projects/:id',
 app.get('/api/tasks',
   authenticateToken,
   apiLimiter,
-  [query('projectId').optional().isUUID()],
+  [
+    query('projectId').optional().isUUID(),
+    query('page').optional().isInt({ min: 1 }).toInt(),
+    query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
+    query('status').optional().isIn(Object.values(TASK_STATUS)),
+    query('priority').optional().isIn(Object.values(TASK_PRIORITY))
+  ],
   validate,
   async (req, res) => {
     try {
-      let query = 'SELECT * FROM tasks ORDER BY createdAt DESC';
-      let params = [];
+      const page = req.query.page || PAGINATION.DEFAULT_PAGE;
+      const limit = req.query.limit || PAGINATION.DEFAULT_LIMIT;
+      const offset = (page - 1) * limit;
+
+      // Построение WHERE условий
+      const conditions = [];
+      const params = [];
 
       if (req.query.projectId) {
-        query = 'SELECT * FROM tasks WHERE projectId = ? ORDER BY createdAt DESC';
-        params = [req.query.projectId];
+        conditions.push('projectId = ?');
+        params.push(req.query.projectId);
       }
 
-      const tasks = await db.all(query, params);
-      res.json(tasks);
+      if (req.query.status) {
+        conditions.push('status = ?');
+        params.push(req.query.status);
+      }
+
+      if (req.query.priority) {
+        conditions.push('priority = ?');
+        params.push(req.query.priority);
+      }
+
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      // Запрос для подсчета общего количества
+      const countQuery = `SELECT COUNT(*) as total FROM tasks ${whereClause}`;
+      const { total } = await db.get(countQuery, params);
+
+      // Запрос для получения данных с пагинацией
+      const dataQuery = `SELECT * FROM tasks ${whereClause} ORDER BY createdAt DESC LIMIT ? OFFSET ?`;
+      const tasks = await db.all(dataQuery, [...params, limit, offset]);
+
+      res.json({
+        tasks,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+          hasNext: page < Math.ceil(total / limit),
+          hasPrev: page > 1
+        }
+      });
     } catch (error) {
       console.error('Ошибка получения задач:', error.message);
       res.status(500).json({ message: 'Внутренняя ошибка сервера' });
@@ -610,8 +706,8 @@ app.post('/api/tasks',
   [
     body('title').trim().isLength({ min: 2, max: 200 }),
     body('description').optional().trim().isLength({ max: 2000 }),
-    body('priority').optional().isIn(['low', 'medium', 'high']),
-    body('status').optional().isIn(['todo', 'in-progress', 'completed']),
+    body('priority').optional().isIn(Object.values(TASK_PRIORITY)),
+    body('status').optional().isIn(Object.values(TASK_STATUS)),
     body('projectId').isUUID(),
     body('assigneeId').optional().isUUID(),
     body('dueDate').optional().isISO8601().toDate()
@@ -619,7 +715,7 @@ app.post('/api/tasks',
   validate,
   async (req, res) => {
     try {
-      const { title, description, priority = 'medium', status = 'todo', projectId, assigneeId, dueDate, parentTaskId } = req.body;
+      const { title, description, priority = TASK_PRIORITY.MEDIUM, status = TASK_STATUS.TODO, projectId, assigneeId, dueDate, parentTaskId } = req.body;
       const taskId = uuidv4();
 
       await db.run(
@@ -641,7 +737,7 @@ app.put('/api/tasks/:id',
   [
     param('id').isUUID(),
     body('title').optional().trim().isLength({ min: 2, max: 200 }),
-    body('priority').optional().isIn(['low', 'medium', 'high']),
+    body('priority').optional().isIn(Object.values(TASK_PRIORITY)),
     body('status').optional().isIn(['todo', 'in-progress', 'completed'])
   ],
   validate,
@@ -864,11 +960,11 @@ app.get('/api/templates',
 
 app.post('/api/templates',
   authenticateToken,
-  checkRole(['admin', 'manager']),
+  checkRole([USER_ROLES.ADMIN, USER_ROLES.MANAGER]),
   [
     body('name').trim().isLength({ min: 2, max: 200 }),
     body('description').optional().trim().isLength({ max: 1000 }),
-    body('priority').optional().isIn(['low', 'medium', 'high']),
+    body('priority').optional().isIn(Object.values(TASK_PRIORITY)),
     body('estimatedHours').optional().isInt({ min: 0 })
   ],
   validate,
@@ -893,7 +989,7 @@ app.post('/api/templates',
 
 app.put('/api/templates/:id',
   authenticateToken,
-  checkRole(['admin', 'manager']),
+  checkRole([USER_ROLES.ADMIN, USER_ROLES.MANAGER]),
   [
     param('id').isUUID(),
     body('name').optional().trim().isLength({ min: 2, max: 200 }),
@@ -931,7 +1027,7 @@ app.put('/api/templates/:id',
 
 app.delete('/api/templates/:id',
   authenticateToken,
-  checkRole(['admin', 'manager']),
+  checkRole([USER_ROLES.ADMIN, USER_ROLES.MANAGER]),
   [param('id').isUUID()],
   validate,
   async (req, res) => {
@@ -1016,7 +1112,7 @@ app.post('/api/labels',
 // PUT /api/labels/:id - обновить метку
 app.put('/api/labels/:id',
   authenticateToken,
-  checkRole(['admin', 'manager']),
+  checkRole([USER_ROLES.ADMIN, USER_ROLES.MANAGER]),
   [
     param('id').isUUID(),
     body('name').optional().trim().isLength({ min: 2, max: 50 }),
@@ -1068,7 +1164,7 @@ app.put('/api/labels/:id',
 // DELETE /api/labels/:id - удалить метку
 app.delete('/api/labels/:id',
   authenticateToken,
-  checkRole(['admin']),
+  checkRole([USER_ROLES.ADMIN]),
   [param('id').isUUID()],
   validate,
   async (req, res) => {

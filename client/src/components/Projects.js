@@ -3,7 +3,14 @@ import { Link } from 'react-router-dom';
 import { Plus, Calendar, User, Edit, Trash2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import Pagination from './Pagination';
 import useApi from '../hooks/useApi';
+import {
+  PROJECT_STATUS,
+  PROJECT_STATUS_LABELS,
+  PROJECT_STATUS_BADGES,
+  DEFAULTS
+} from '../constants';
 
 const Projects = () => {
   const { get, post, put, delete: deleteApi } = useApi();
@@ -12,23 +19,35 @@ const Projects = () => {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
+  const [pagination, setPagination] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(20);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
     startDate: '',
     endDate: '',
-    status: 'active',
+    status: DEFAULTS.PROJECT_STATUS,
     managerId: ''
   });
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [currentPage, itemsPerPage]);
 
   const fetchData = async () => {
     try {
-      const projectsData = await get('/api/projects');
-      setProjects(projectsData);
+      // Build query parameters
+      const params = new URLSearchParams({
+        page: currentPage,
+        limit: itemsPerPage
+      });
+
+      const projectsResponse = await get(`/api/projects?${params.toString()}`);
+
+      // Handle paginated response
+      setProjects(projectsResponse.projects || projectsResponse);
+      setPagination(projectsResponse.pagination || null);
       
       let usersData = [];
       try {
@@ -64,7 +83,7 @@ const Projects = () => {
         description: '',
         startDate: '',
         endDate: '',
-        status: 'active',
+        status: DEFAULTS.PROJECT_STATUS,
         managerId: ''
       });
     } catch (error) {
@@ -97,27 +116,26 @@ const Projects = () => {
   };
 
   const getStatusBadge = (status) => {
-    const statusMap = {
-      'active': 'badge-success',
-      'completed': 'badge-primary',
-      'paused': 'badge-warning'
-    };
-    return statusMap[status] || 'badge-secondary';
+    return PROJECT_STATUS_BADGES[status] || 'badge-secondary';
   };
 
   const getStatusText = (status) => {
-    const statusMap = {
-      'active': 'Активный',
-      'completed': 'Завершен',
-      'paused': 'Приостановлен'
-    };
-    return statusMap[status] || status;
+    return PROJECT_STATUS_LABELS[status] || status;
   };
 
   const getUserName = (userId) => {
     if (!Array.isArray(users)) return 'Не назначен';
     const user = users.find(u => u.id === userId);
     return user ? user.name : 'Не назначен';
+  };
+
+  const handlePageChange = (newPage) => {
+    setCurrentPage(newPage);
+  };
+
+  const handleLimitChange = (newLimit) => {
+    setItemsPerPage(newLimit);
+    setCurrentPage(1); // Reset to first page when changing limit
   };
 
   if (loading) {
@@ -216,6 +234,17 @@ const Projects = () => {
         </div>
       )}
 
+      {/* Pagination Controls */}
+      {pagination && (
+        <Pagination
+          pagination={pagination}
+          onPageChange={handlePageChange}
+          onLimitChange={handleLimitChange}
+          showLimitSelector={true}
+          limitOptions={[10, 20, 50, 100]}
+        />
+      )}
+
       {/* Модальное окно создания/редактирования */}
       {showModal && (
         <div className="modal-overlay">
@@ -284,9 +313,9 @@ const Projects = () => {
                     value={formData.status}
                     onChange={(e) => setFormData({...formData, status: e.target.value})}
                   >
-                    <option value="active">Активный</option>
-                    <option value="completed">Завершен</option>
-                    <option value="paused">Приостановлен</option>
+                    <option value={PROJECT_STATUS.ACTIVE}>{PROJECT_STATUS_LABELS[PROJECT_STATUS.ACTIVE]}</option>
+                    <option value={PROJECT_STATUS.COMPLETED}>{PROJECT_STATUS_LABELS[PROJECT_STATUS.COMPLETED]}</option>
+                    <option value={PROJECT_STATUS.PAUSED}>{PROJECT_STATUS_LABELS[PROJECT_STATUS.PAUSED]}</option>
                   </select>
                 </div>
                 
