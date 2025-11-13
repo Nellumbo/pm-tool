@@ -30,6 +30,7 @@ const Auth = () => {
 
       const response = await fetch(url, {
         method: 'POST',
+        credentials: 'include', // Важно: получаем cookies
         headers: {
           'Content-Type': 'application/json',
         },
@@ -39,8 +40,9 @@ const Auth = () => {
       const data = await response.json();
 
       if (response.ok) {
-        // Используем функцию login из контекста
-        login(data.token, data.user);
+        // JWT токен уже установлен в httpOnly cookie сервером
+        // Сохраняем только данные пользователя
+        login(data.user);
       } else {
         setError(data.message || 'Произошла ошибка');
       }

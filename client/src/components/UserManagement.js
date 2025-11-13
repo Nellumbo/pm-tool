@@ -21,20 +21,12 @@ const UserManagement = () => {
 
   const fetchUsers = async () => {
     try {
-      // Получаем токен из localStorage
-      const token = localStorage.getItem('token');
-      const headers = {
-        'Content-Type': 'application/json'
-      };
-      
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-      
-      // Для демонстрации также добавляем заголовок роли
-      headers['X-User-Role'] = currentRole;
-      
-      const response = await fetch('/api/users', { headers });
+      const response = await fetch('/api/users', {
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
       
       if (response.ok) {
         const data = await response.json();
@@ -58,19 +50,12 @@ const UserManagement = () => {
       const url = editingUser ? `/api/users/${editingUser.id}` : '/api/users';
       const method = editingUser ? 'PUT' : 'POST';
       
-      const token = localStorage.getItem('token');
-      const headers = {
-        'Content-Type': 'application/json',
-        'X-User-Role': 'admin' // Для создания/редактирования нужны права админа
-      };
-      
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-      
       const response = await fetch(url, {
         method,
-        headers,
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
+        },
         body: JSON.stringify(formData),
       });
 
@@ -98,18 +83,12 @@ const UserManagement = () => {
   const handleDelete = async (userId) => {
     if (window.confirm('Вы уверены, что хотите удалить этого пользователя?')) {
       try {
-        const token = localStorage.getItem('token');
-        const headers = {
-          'X-User-Role': 'admin'
-        };
-        
-        if (token) {
-          headers['Authorization'] = `Bearer ${token}`;
-        }
-        
         const response = await fetch(`/api/users/${userId}`, {
           method: 'DELETE',
-          headers
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json'
+          }
         });
 
         if (response.ok) {

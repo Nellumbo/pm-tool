@@ -18,7 +18,9 @@ const TaskComments = ({ taskId, users }) => {
 
   const fetchComments = async () => {
     try {
-      const response = await fetch(`/api/tasks/${taskId}/comments`);
+      const response = await fetch(`/api/tasks/${taskId}/comments`, {
+        credentials: 'include'
+      });
       const data = await response.json();
       setComments(data);
     } catch (error) {
@@ -35,6 +37,7 @@ const TaskComments = ({ taskId, users }) => {
     try {
       const response = await fetch(`/api/tasks/${taskId}/comments`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
         },
@@ -60,6 +63,7 @@ const TaskComments = ({ taskId, users }) => {
     try {
       const response = await fetch(`/api/comments/${commentId}`, {
         method: 'PUT',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
         },
@@ -91,6 +95,7 @@ const TaskComments = ({ taskId, users }) => {
     try {
       const response = await fetch(`/api/comments/${commentId}`, {
         method: 'DELETE',
+        credentials: 'include',
       });
 
       if (response.ok) {

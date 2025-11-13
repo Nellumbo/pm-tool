@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const cookieParser = require('cookie-parser');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const moment = require('moment');
@@ -99,6 +100,9 @@ app.use(cors({
 app.use(bodyParser.json({ limit: '10kb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '10kb' }));
 
+// Cookie parser для работы с cookies
+app.use(cookieParser());
+
 // Раздача статических файлов React приложения
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../client/build')));
@@ -110,8 +114,14 @@ if (process.env.NODE_ENV === 'production') {
 
 // Middleware для проверки JWT токена
 const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+  // Приоритет: cookie -> Authorization header (для обратной совместимости)
+  let token = req.cookies.token;
+
+  // Fallback на Authorization header если cookie отсутствует
+  if (!token) {
+    const authHeader = req.headers['authorization'];
+    token = authHeader && authHeader.split(' ')[1];
+  }
 
   if (!token) {
     return res.status(401).json({ message: 'Токен доступа отсутствует' });
@@ -217,10 +227,17 @@ app.post('/api/auth/login',
         { expiresIn: '24h' }
       );
 
+      // Устанавливаем JWT в httpOnly cookie для защиты от XSS
+      res.cookie('token', token, {
+        httpOnly: true, // Недоступен для JavaScript
+        secure: process.env.NODE_ENV === 'production', // HTTPS только в production
+        sameSite: 'strict', // CSRF защита
+        maxAge: 24 * 60 * 60 * 1000 // 24 часа
+      });
+
       const { password: _, ...userWithoutPassword } = user;
       res.json({
         message: 'Успешный вход в систему',
-        token,
         user: userWithoutPassword
       });
     } catch (error) {
@@ -264,10 +281,17 @@ app.post('/api/auth/register',
         { expiresIn: '24h' }
       );
 
+      // Устанавливаем JWT в httpOnly cookie для защиты от XSS
+      res.cookie('token', token, {
+        httpOnly: true, // Недоступен для JavaScript
+        secure: process.env.NODE_ENV === 'production', // HTTPS только в production
+        sameSite: 'strict', // CSRF защита
+        maxAge: 24 * 60 * 60 * 1000 // 24 часа
+      });
+
       const newUser = await db.get('SELECT id, name, email, role, department, position FROM users WHERE id = ?', [userId]);
       res.status(201).json({
         message: 'Пользователь создан успешно',
-        token,
         user: newUser
       });
     } catch (error) {
@@ -280,6 +304,16 @@ app.post('/api/auth/register',
 // Проверка токена
 app.post('/api/auth/verify', authenticateToken, (req, res) => {
   res.json({ valid: true, user: req.user });
+});
+
+// Выход из системы (очистка cookie)
+app.post('/api/auth/logout', (req, res) => {
+  res.clearCookie('token', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict'
+  });
+  res.json({ message: 'Выход выполнен успешно' });
 });
 
 // ============================================================================
@@ -510,9 +544,12 @@ app.delete('/api/projects/:id',
         return res.status(404).json({ message: 'Проект не найден' });
       }
 
-      // Удаляем все связанные задачи (каскадное удаление через БД)
-      await db.run('DELETE FROM tasks WHERE projectId = ?', [req.params.id]);
-      await db.run('DELETE FROM projects WHERE id = ?', [req.params.id]);
+      // Удаляем проект и все связанные задачи в транзакции
+      // Это гарантирует атомарность: либо все удалится, либо ничего
+      await db.runInTransaction(async () => {
+        await db.run('DELETE FROM tasks WHERE projectId = ?', [req.params.id]);
+        await db.run('DELETE FROM projects WHERE id = ?', [req.params.id]);
+      });
 
       res.json({ message: 'Проект удален' });
     } catch (error) {
@@ -680,11 +717,14 @@ app.delete('/api/tasks/:id',
         return res.status(404).json({ message: 'Задача не найдена' });
       }
 
-      // Удаляем комментарии, метки и подзадачи (каскадное удаление)
-      await db.run('DELETE FROM comments WHERE taskId = ?', [req.params.id]);
-      await db.run('DELETE FROM task_labels WHERE taskId = ?', [req.params.id]);
-      await db.run('DELETE FROM tasks WHERE parentTaskId = ?', [req.params.id]);
-      await db.run('DELETE FROM tasks WHERE id = ?', [req.params.id]);
+      // Удаляем задачу и все связанные данные в транзакции
+      // Это гарантирует: либо все удалится атомарно, либо ничего
+      await db.runInTransaction(async () => {
+        await db.run('DELETE FROM comments WHERE taskId = ?', [req.params.id]);
+        await db.run('DELETE FROM task_labels WHERE taskId = ?', [req.params.id]);
+        await db.run('DELETE FROM tasks WHERE parentTaskId = ?', [req.params.id]);
+        await db.run('DELETE FROM tasks WHERE id = ?', [req.params.id]);
+      });
 
       res.json({ message: 'Задача удалена' });
     } catch (error) {

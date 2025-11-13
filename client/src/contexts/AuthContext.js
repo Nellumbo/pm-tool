@@ -12,30 +12,29 @@ export const useAuth = () => {
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Проверяем, есть ли сохраненный токен при загрузке приложения
-    const savedToken = localStorage.getItem('token');
+    // Проверяем, есть ли сохраненный пользователь при загрузке приложения
+    // JWT токен теперь в httpOnly cookie, недоступен для JS
     const savedUser = localStorage.getItem('user');
 
-    if (savedToken && savedUser) {
-      setToken(savedToken);
+    if (savedUser) {
       setUser(JSON.parse(savedUser));
-      
-      // Проверяем валидность токена
-      verifyToken(savedToken);
+      // Проверяем валидность токена из cookie
+      verifyToken();
     } else {
       setLoading(false);
     }
   }, []);
 
-  const verifyToken = async (tokenToVerify) => {
+  const verifyToken = async () => {
     try {
       const response = await fetch('/api/auth/verify', {
+        method: 'POST',
+        credentials: 'include', // Важно: отправляет cookies
         headers: {
-          'Authorization': `Bearer ${tokenToVerify}`
+          'Content-Type': 'application/json'
         }
       });
 
@@ -54,25 +53,36 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const login = (newToken, newUser) => {
-    setToken(newToken);
+  const login = (newUser) => {
+    // JWT токен уже установлен в httpOnly cookie сервером
+    // Сохраняем только данные пользователя для UX
     setUser(newUser);
-    localStorage.setItem('token', newToken);
     localStorage.setItem('user', JSON.stringify(newUser));
   };
 
-  const logout = () => {
-    setToken(null);
-    setUser(null);
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+  const logout = async () => {
+    try {
+      // Вызываем endpoint для очистки cookie на сервере
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+    } catch (error) {
+      console.error('Ошибка при выходе:', error);
+    } finally {
+      // Очищаем локальное состояние
+      setUser(null);
+      localStorage.removeItem('user');
+    }
   };
 
   const getAuthHeaders = () => {
-    return token ? {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    } : {
+    // JWT токен автоматически отправляется в cookie
+    // Просто возвращаем базовые headers
+    return {
       'Content-Type': 'application/json'
     };
   };
@@ -87,7 +97,6 @@ export const AuthProvider = ({ children }) => {
 
   const value = {
     user,
-    token,
     login,
     logout,
     loading,

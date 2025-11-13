@@ -11,6 +11,7 @@ export const useApi = () => {
 
     const response = await fetch(url, {
       ...options,
+      credentials: 'include', // Важно: отправляет cookies
       headers
     });
 

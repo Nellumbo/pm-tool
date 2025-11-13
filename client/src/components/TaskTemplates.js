@@ -38,6 +38,7 @@ const TaskTemplates = ({ onClose, onSelectTemplate }) => {
       
       const response = await fetch(url, {
         method,
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
         },
@@ -65,6 +66,7 @@ const TaskTemplates = ({ onClose, onSelectTemplate }) => {
       try {
         const response = await fetch(`/api/templates/${templateId}`, {
           method: 'DELETE',
+          credentials: 'include',
         });
 
         if (response.ok) {

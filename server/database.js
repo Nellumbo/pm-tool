@@ -108,7 +108,38 @@ class Database {
         PRIMARY KEY (taskId, labelId),
         FOREIGN KEY (taskId) REFERENCES tasks (id) ON DELETE CASCADE,
         FOREIGN KEY (labelId) REFERENCES labels (id) ON DELETE CASCADE
-      )`
+      )`,
+
+      // ============================================================================
+      // ИНДЕКСЫ ДЛЯ ОПТИМИЗАЦИИ ПРОИЗВОДИТЕЛЬНОСТИ
+      // ============================================================================
+
+      // Индексы для users
+      `CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
+      `CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)`,
+
+      // Индексы для projects
+      `CREATE INDEX IF NOT EXISTS idx_projects_managerId ON projects(managerId)`,
+      `CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status)`,
+
+      // Индексы для tasks (самые критичные!)
+      `CREATE INDEX IF NOT EXISTS idx_tasks_projectId ON tasks(projectId)`,
+      `CREATE INDEX IF NOT EXISTS idx_tasks_assigneeId ON tasks(assigneeId)`,
+      `CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`,
+      `CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)`,
+      `CREATE INDEX IF NOT EXISTS idx_tasks_dueDate ON tasks(dueDate)`,
+      `CREATE INDEX IF NOT EXISTS idx_tasks_parentTaskId ON tasks(parentTaskId)`,
+
+      // Индексы для comments
+      `CREATE INDEX IF NOT EXISTS idx_comments_taskId ON comments(taskId)`,
+      `CREATE INDEX IF NOT EXISTS idx_comments_userId ON comments(userId)`,
+
+      // Индексы для task_labels (junction table)
+      `CREATE INDEX IF NOT EXISTS idx_task_labels_taskId ON task_labels(taskId)`,
+      `CREATE INDEX IF NOT EXISTS idx_task_labels_labelId ON task_labels(labelId)`,
+
+      // Индексы для labels
+      `CREATE INDEX IF NOT EXISTS idx_labels_name ON labels(name)`
     ];
 
     for (const query of queries) {
@@ -367,6 +398,55 @@ class Database {
     }
 
     console.log('Демо-данные созданы успешно!');
+  }
+
+  /**
+   * Выполнение операций в транзакции
+   * Обеспечивает атомарность: все операции выполняются или откатываются
+   * @param {Function} callback - Async функция с операциями БД
+   * @returns {Promise} - Результат callback функции
+   *
+   * @example
+   * await db.runInTransaction(async () => {
+   *   await db.run('DELETE FROM tasks WHERE projectId = ?', [projectId]);
+   *   await db.run('DELETE FROM projects WHERE id = ?', [projectId]);
+   * });
+   */
+  async runInTransaction(callback) {
+    return new Promise((resolve, reject) => {
+      this.db.serialize(() => {
+        this.db.run('BEGIN TRANSACTION', (err) => {
+          if (err) {
+            return reject(err);
+          }
+
+          // Выполняем операции callback
+          callback()
+            .then(result => {
+              // Если успешно - commit
+              this.db.run('COMMIT', (commitErr) => {
+                if (commitErr) {
+                  // Если commit failed - rollback
+                  this.db.run('ROLLBACK', () => {
+                    reject(commitErr);
+                  });
+                } else {
+                  resolve(result);
+                }
+              });
+            })
+            .catch(error => {
+              // Если ошибка в callback - rollback
+              this.db.run('ROLLBACK', (rollbackErr) => {
+                if (rollbackErr) {
+                  console.error('Ошибка отката транзакции:', rollbackErr);
+                }
+                reject(error);
+              });
+            });
+        });
+      });
+    });
   }
 
   close() {
