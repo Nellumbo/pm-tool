@@ -6,6 +6,9 @@ const { v4: uuidv4 } = require('uuid');
 const moment = require('moment');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const { body, param, query, validationResult } = require('express-validator');
 const Database = require('./database');
 
 // Загружаем переменные окружения
@@ -13,22 +16,102 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET || 'demo-secret-key-change-in-production';
 
-// Middleware
-app.use(cors());
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+// ============================================================================
+// SECURITY: Проверка критических переменных окружения
+// ============================================================================
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('❌ FATAL: JWT_SECRET environment variable is required!');
+  console.error('   Please set JWT_SECRET in your .env file');
+  console.error('   Example: JWT_SECRET=your-super-secret-key-here-min-32-chars');
+  process.exit(1);
+}
+
+if (JWT_SECRET.length < 32) {
+  console.error('❌ FATAL: JWT_SECRET must be at least 32 characters long for security!');
+  process.exit(1);
+}
+
+// Инициализация базы данных
+const db = new Database();
+
+// ============================================================================
+// SECURITY MIDDLEWARE
+// ============================================================================
+
+// Helmet - устанавливает различные HTTP заголовки для безопасности
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", 'data:', 'https:'],
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"]
+    }
+  },
+  crossOriginEmbedderPolicy: false
+}));
+
+// Rate limiting для защиты от brute force атак
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 минут
+  max: 5, // максимум 5 попыток
+  message: { message: 'Слишком много попыток входа. Попробуйте через 15 минут.' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 минут
+  max: 100, // максимум 100 запросов
+  message: { message: 'Слишком много запросов. Попробуйте позже.' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+// CORS конфигурация из переменных окружения
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : ['http://localhost:3000', 'http://localhost:5000', 'http://127.0.0.1:3000', 'http://127.0.0.1:5000'];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Разрешаем запросы без origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  optionsSuccessStatus: 200
+}));
+
+// Body parser с лимитами размера для защиты от DoS
+app.use(bodyParser.json({ limit: '10kb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '10kb' }));
 
 // Раздача статических файлов React приложения
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../client/build')));
 }
 
+// ============================================================================
+// AUTHENTICATION & AUTHORIZATION MIDDLEWARE
+// ============================================================================
+
 // Middleware для проверки JWT токена
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+  const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
     return res.status(401).json({ message: 'Токен доступа отсутствует' });
@@ -43,929 +126,1042 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-// Middleware для проверки ролей
+// Middleware для проверки ролей (ВСЕГДА требует authenticateToken перед собой!)
 const checkRole = (allowedRoles) => {
   return (req, res, next) => {
-    // Если используется JWT аутентификация
-    if (req.user) {
-      if (allowedRoles.includes(req.user.role)) {
-        next();
-      } else {
-        res.status(403).json({ message: 'Недостаточно прав для выполнения операции' });
-      }
-    } else {
-      // Fallback для демонстрации (заголовок)
-      const userRole = req.headers['x-user-role'] || 'developer';
-      if (allowedRoles.includes(userRole)) {
-        req.userRole = userRole;
-        next();
-      } else {
-        res.status(403).json({ message: 'Недостаточно прав для выполнения операции' });
-      }
+    if (!req.user) {
+      return res.status(401).json({ message: 'Аутентификация обязательна' });
     }
+
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: 'Недостаточно прав доступа' });
+    }
+
+    next();
   };
 };
 
 // Middleware для логирования действий
 const logAction = (action) => {
   return (req, res, next) => {
-    const timestamp = moment().format('YYYY-MM-DD HH:mm:ss');
-    const userRole = req.headers['x-user-role'] || 'developer';
-    console.log(`[${timestamp}] ${userRole}: ${action} - ${req.method} ${req.path}`);
+    const userRole = req.user ? req.user.role : 'anonymous';
+    const userId = req.user ? req.user.userId : 'unknown';
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] ${userRole}(${userId}): ${action} - ${req.method} ${req.path}`);
     next();
   };
 };
 
-// Инициализация базы данных
-const db = new Database();
-
-// Добавляем тестовые данные
-projects = [
-  {
-    id: '1',
-    name: 'Разработка веб-приложения',
-    description: 'Создание современного веб-приложения для управления проектами с использованием React и Node.js',
-    startDate: moment().subtract(30, 'days').format('YYYY-MM-DD'),
-    endDate: moment().add(60, 'days').format('YYYY-MM-DD'),
-    status: 'active',
-    managerId: '2', // Менеджер проектов
-    createdAt: moment().subtract(30, 'days').format(),
-    updatedAt: moment().format()
-  },
-  {
-    id: '2',
-    name: 'Мобильное приложение',
-    description: 'Разработка мобильного приложения для iOS и Android с синхронизацией данных',
-    startDate: moment().subtract(15, 'days').format('YYYY-MM-DD'),
-    endDate: moment().add(90, 'days').format('YYYY-MM-DD'),
-    status: 'active',
-    managerId: '2', // Менеджер проектов
-    createdAt: moment().subtract(15, 'days').format(),
-    updatedAt: moment().format()
-  },
-  {
-    id: '3',
-    name: 'Система аналитики',
-    description: 'Внедрение системы аналитики и отчетности для отслеживания KPI',
-    startDate: moment().subtract(45, 'days').format('YYYY-MM-DD'),
-    endDate: moment().subtract(5, 'days').format('YYYY-MM-DD'),
-    status: 'completed',
-    managerId: '1', // Администратор
-    createdAt: moment().subtract(45, 'days').format(),
-    updatedAt: moment().subtract(5, 'days').format()
+// Middleware для валидации
+const validate = (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      message: 'Ошибка валидации',
+      errors: errors.array()
+    });
   }
-];
-
-tasks = [
-  // Задачи для проекта "Разработка веб-приложения"
-  {
-    id: '1',
-    title: 'Настройка инфраструктуры',
-    description: 'Настройка сервера разработки, установка зависимостей и настройка CI/CD',
-    priority: 'high',
-    status: 'completed',
-    projectId: '1',
-    assigneeId: '1', // Администратор
-    dueDate: moment().subtract(25, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(30, 'days').format(),
-    updatedAt: moment().subtract(25, 'days').format()
-  },
-  {
-    id: '2',
-    title: 'Создание дизайн-системы',
-    description: 'Разработка UI/UX дизайна, создание компонентной библиотеки',
-    priority: 'high',
-    status: 'in-progress',
-    projectId: '1',
-    assigneeId: '3', // Разработчик
-    dueDate: moment().add(10, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(28, 'days').format(),
-    updatedAt: moment().subtract(2, 'days').format()
-  },
-  {
-    id: '3',
-    title: 'API для аутентификации',
-    description: 'Реализация JWT аутентификации, регистрация и авторизация пользователей',
-    priority: 'high',
-    status: 'completed',
-    projectId: '1',
-    assigneeId: '3', // Разработчик
-    dueDate: moment().subtract(20, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(25, 'days').format(),
-    updatedAt: moment().subtract(20, 'days').format()
-  },
-  {
-    id: '4',
-    title: 'Frontend компоненты',
-    description: 'Создание основных React компонентов для интерфейса',
-    priority: 'medium',
-    status: 'in-progress',
-    projectId: '1',
-    assigneeId: '3', // Разработчик
-    dueDate: moment().add(15, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(20, 'days').format(),
-    updatedAt: moment().subtract(1, 'days').format()
-  },
-  {
-    id: '5',
-    title: 'Интеграционные тесты',
-    description: 'Написание и запуск интеграционных тестов для API',
-    priority: 'medium',
-    status: 'todo',
-    projectId: '1',
-    assigneeId: '4', // Тестировщик
-    dueDate: moment().add(20, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(15, 'days').format(),
-    updatedAt: moment().subtract(15, 'days').format()
-  },
-  
-  // Задачи для проекта "Мобильное приложение"
-  {
-    id: '6',
-    title: 'Архитектура приложения',
-    description: 'Проектирование архитектуры мобильного приложения, выбор технологий',
-    priority: 'high',
-    status: 'completed',
-    projectId: '2',
-    assigneeId: '3', // Разработчик
-    dueDate: moment().subtract(10, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(15, 'days').format(),
-    updatedAt: moment().subtract(10, 'days').format()
-  },
-  {
-    id: '7',
-    title: 'UI/UX дизайн мобильного приложения',
-    description: 'Создание дизайна экранов и пользовательских сценариев',
-    priority: 'medium',
-    status: 'in-progress',
-    projectId: '2',
-    assigneeId: '3', // Разработчик
-    dueDate: moment().add(25, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(12, 'days').format(),
-    updatedAt: moment().subtract(1, 'days').format()
-  },
-  {
-    id: '8',
-    title: 'Настройка синхронизации данных',
-    description: 'Реализация синхронизации между мобильным приложением и сервером',
-    priority: 'high',
-    status: 'todo',
-    projectId: '2',
-    assigneeId: '3', // Разработчик
-    dueDate: moment().add(40, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(8, 'days').format(),
-    updatedAt: moment().subtract(8, 'days').format()
-  },
-  
-  // Задачи для завершенного проекта "Система аналитики"
-  {
-    id: '9',
-    title: 'Исследование требований',
-    description: 'Анализ бизнес-требований и выбор инструментов аналитики',
-    priority: 'high',
-    status: 'completed',
-    projectId: '3',
-    assigneeId: '2', // Менеджер проектов
-    dueDate: moment().subtract(40, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(45, 'days').format(),
-    updatedAt: moment().subtract(40, 'days').format()
-  },
-  {
-    id: '10',
-    title: 'Внедрение Google Analytics',
-    description: 'Настройка и интеграция Google Analytics для отслеживания метрик',
-    priority: 'medium',
-    status: 'completed',
-    projectId: '3',
-    assigneeId: '3', // Разработчик
-    dueDate: moment().subtract(20, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(35, 'days').format(),
-    updatedAt: moment().subtract(20, 'days').format()
-  },
-  {
-    id: '11',
-    title: 'Создание дашборда отчетов',
-    description: 'Разработка дашборда для визуализации аналитических данных',
-    priority: 'high',
-    status: 'completed',
-    projectId: '3',
-    assigneeId: '3', // Разработчик
-    dueDate: moment().subtract(10, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(25, 'days').format(),
-    updatedAt: moment().subtract(10, 'days').format()
-  },
-  {
-    id: '12',
-    title: 'Тестирование системы аналитики',
-    description: 'Комплексное тестирование всех компонентов системы аналитики',
-    priority: 'medium',
-    status: 'completed',
-    projectId: '3',
-    assigneeId: '4', // Тестировщик
-    dueDate: moment().subtract(5, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(15, 'days').format(),
-    updatedAt: moment().subtract(5, 'days').format()
-  }
-];
-
-// Добавляем тестовые комментарии
-comments = [
-  {
-    id: '1',
-    taskId: '2',
-    content: 'Начал работу над дизайн-системой. Создал базовые компоненты кнопок и форм.',
-    authorId: '3', // Разработчик
-    createdAt: moment().subtract(5, 'days').format(),
-    updatedAt: moment().subtract(5, 'days').format()
-  },
-  {
-    id: '2',
-    taskId: '2',
-    content: 'Нужно добавить поддержку темной темы в дизайн-систему.',
-    authorId: '1', // Администратор
-    createdAt: moment().subtract(3, 'days').format(),
-    updatedAt: moment().subtract(3, 'days').format()
-  },
-  {
-    id: '3',
-    taskId: '4',
-    content: 'Создал основные компоненты: Header, Sidebar, Modal. Осталось доделать таблицы.',
-    authorId: '3', // Разработчик
-    createdAt: moment().subtract(1, 'days').format(),
-    updatedAt: moment().subtract(1, 'days').format()
-  },
-  {
-    id: '4',
-    taskId: '7',
-    content: 'Дизайн экранов готов. Жду фидбека от заказчика.',
-    authorId: '3', // Разработчик
-    createdAt: moment().subtract(2, 'days').format(),
-    updatedAt: moment().subtract(2, 'days').format()
-  },
-  {
-    id: '5',
-    taskId: '5',
-    content: 'Начну писать тесты на следующей неделе.',
-    authorId: '4', // Тестировщик
-    createdAt: moment().subtract(1, 'days').format(),
-    updatedAt: moment().subtract(1, 'days').format()
-  }
-];
-
-// Хешируем пароли для демонстрации (в реальном приложении это делается при регистрации)
-const hashPassword = async (password) => {
-  return await bcrypt.hash(password, 10);
+  next();
 };
 
-// Создаем пользователей с хешированными паролями
-let users = [
-  {
-    id: '1',
-    name: 'Администратор',
-    email: 'admin@example.com',
-    password: '$2b$10$FNd6iKn/Yxq7UtatAgTaZuHg3QIfnt1u6b/JL9KfNyVIWV3/nrywC', // admin123
-    role: 'admin',
-    department: 'Управление',
-    position: 'Администратор системы'
-  },
-  {
-    id: '2',
-    name: 'Менеджер проектов',
-    email: 'manager@example.com',
-    password: '$2b$10$KXP9dDOxT6CHhsMq6phOvuSSDTFMR7zN3jYv3XD3S6Pexgdmew6Dm', // manager123
-    role: 'manager',
-    department: 'Управление проектами',
-    position: 'Менеджер проектов'
-  },
-  {
-    id: '3',
-    name: 'Разработчик',
-    email: 'developer@example.com',
-    password: '$2b$10$XRXiMM8Zbdyl2D2cNQA9N.RSw9oDnXeGM9Rm6VTB1IgNO8GLSM3Oe', // dev123
-    role: 'developer',
-    department: 'Разработка',
-    position: 'Разработчик'
-  },
-  {
-    id: '4',
-    name: 'Тестировщик',
-    email: 'tester@example.com',
-    password: '$2b$10$RlGL.6MIvap1eRQJPesfbOYv4fgSIlUUJyLqVWKeY9lwychCTmf.q', // test123
-    role: 'developer',
-    department: 'QA',
-    position: 'Тестировщик'
-  }
-];
-let templates = [
-  {
-    id: '1',
-    name: 'Разработка функционала',
-    description: 'Создание новой функциональности',
-    priority: 'high',
-    category: 'development'
-  },
-  {
-    id: '2',
-    name: 'Исправление ошибки',
-    description: 'Исправление бага в системе',
-    priority: 'high',
-    category: 'bugfix'
-  },
-  {
-    id: '3',
-    name: 'Тестирование',
-    description: 'Проведение тестирования функционала',
-    priority: 'medium',
-    category: 'testing'
-  },
-  {
-    id: '4',
-    name: 'Документация',
-    description: 'Создание или обновление документации',
-    priority: 'low',
-    category: 'documentation'
-  },
-  {
-    id: '5',
-    name: 'Встреча с клиентом',
-    description: 'Проведение встречи с заказчиком',
-    priority: 'medium',
-    category: 'meeting'
-  }
-];
+// ============================================================================
+// HEALTH CHECK ENDPOINTS
+// ============================================================================
 
-// Аутентификация
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    
-    // Находим пользователя
-    const user = users.find(u => u.email === email);
-    if (!user) {
-      return res.status(401).json({ message: 'Неверный email или пароль' });
-    }
-    
-    // Проверяем пароль
-    const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) {
-      return res.status(401).json({ message: 'Неверный email или пароль' });
-    }
-    
-    // Создаем JWT токен
-    const token = jwt.sign(
-      { 
-        id: user.id, 
-        email: user.email, 
-        role: user.role,
-        name: user.name 
-      },
-      JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-    
-    // Возвращаем пользователя без пароля
-    const { password: _, ...userWithoutPassword } = user;
-    res.json({
-      token,
-      user: userWithoutPassword
-    });
-  } catch (error) {
-    console.error('Ошибка входа:', error);
-    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
-  }
-});
-
-app.post('/api/auth/register', async (req, res) => {
-  try {
-    const { name, email, password, role = 'developer', department, position } = req.body;
-    
-    // Проверяем, существует ли пользователь
-    const existingUser = users.find(u => u.email === email);
-    if (existingUser) {
-      return res.status(400).json({ message: 'Пользователь с таким email уже существует' });
-    }
-    
-    // Хешируем пароль
-    const hashedPassword = await hashPassword(password);
-    
-    // Создаем пользователя
-    const newUser = {
-      id: uuidv4(),
-      name,
-      email,
-      password: hashedPassword,
-      role,
-      department,
-      position,
-      createdAt: moment().format()
-    };
-    
-    users.push(newUser);
-    
-    // Создаем JWT токен
-    const token = jwt.sign(
-      { 
-        id: newUser.id, 
-        email: newUser.email, 
-        role: newUser.role,
-        name: newUser.name 
-      },
-      JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-    
-    // Возвращаем пользователя без пароля
-    const { password: _, ...userWithoutPassword } = newUser;
-    res.json({
-      token,
-      user: userWithoutPassword
-    });
-  } catch (error) {
-    console.error('Ошибка регистрации:', error);
-    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
-  }
-});
-
-app.post('/api/auth/verify', authenticateToken, (req, res) => {
-  res.json({ user: req.user });
-});
-
-// Routes для пользователей
-app.get('/api/users', authenticateToken, checkRole(['admin', 'manager']), (req, res) => {
-  // Возвращаем пользователей без паролей
-  const usersWithoutPasswords = users.map(user => {
-    const { password, ...userWithoutPassword } = user;
-    return userWithoutPassword;
-  });
-  res.json(usersWithoutPasswords);
-});
-
-app.post('/api/users', checkRole(['admin']), logAction('Создание пользователя'), (req, res) => {
-  const { name, email, role = 'developer', department, position } = req.body;
-  const newUser = {
-    id: uuidv4(),
-    name,
-    email,
-    role,
-    department,
-    position,
-    createdAt: moment().format()
-  };
-  users.push(newUser);
-  res.json(newUser);
-});
-
-app.put('/api/users/:id', checkRole(['admin']), logAction('Обновление пользователя'), (req, res) => {
-  const userIndex = users.findIndex(u => u.id === req.params.id);
-  if (userIndex === -1) {
-    return res.status(404).json({ message: 'Пользователь не найден' });
-  }
-  
-  const updatedUser = {
-    ...users[userIndex],
-    ...req.body,
-    updatedAt: moment().format()
-  };
-  users[userIndex] = updatedUser;
-  res.json(updatedUser);
-});
-
-app.delete('/api/users/:id', checkRole(['admin']), logAction('Удаление пользователя'), (req, res) => {
-  const userIndex = users.findIndex(u => u.id === req.params.id);
-  if (userIndex === -1) {
-    return res.status(404).json({ message: 'Пользователь не найден' });
-  }
-  
-  users.splice(userIndex, 1);
-  res.json({ message: 'Пользователь удален' });
-});
-
-// Шаблоны задач
-app.get('/api/templates', (req, res) => {
-  const { category } = req.query;
-  
-  if (category) {
-    const filteredTemplates = templates.filter(t => t.category === category);
-    res.json(filteredTemplates);
-  } else {
-    res.json(templates);
-  }
-});
-
-app.post('/api/templates', (req, res) => {
-  const { name, description, priority = 'medium', category } = req.body;
-  const newTemplate = {
-    id: uuidv4(),
-    name,
-    description,
-    priority,
-    category,
-    createdAt: moment().format()
-  };
-  templates.push(newTemplate);
-  res.json(newTemplate);
-});
-
-app.put('/api/templates/:id', (req, res) => {
-  const templateIndex = templates.findIndex(t => t.id === req.params.id);
-  if (templateIndex === -1) {
-    return res.status(404).json({ message: 'Шаблон не найден' });
-  }
-  
-  const updatedTemplate = {
-    ...templates[templateIndex],
-    ...req.body,
-    updatedAt: moment().format()
-  };
-  templates[templateIndex] = updatedTemplate;
-  res.json(updatedTemplate);
-});
-
-app.delete('/api/templates/:id', (req, res) => {
-  const templateIndex = templates.findIndex(t => t.id === req.params.id);
-  if (templateIndex === -1) {
-    return res.status(404).json({ message: 'Шаблон не найден' });
-  }
-  
-  templates.splice(templateIndex, 1);
-  res.json({ message: 'Шаблон удален' });
-});
-
-// Комментарии к задачам
-app.get('/api/tasks/:taskId/comments', (req, res) => {
-  const taskComments = comments.filter(c => c.taskId === req.params.taskId);
-  res.json(taskComments);
-});
-
-app.post('/api/tasks/:taskId/comments', (req, res) => {
-  const { content, authorId } = req.body;
-  const newComment = {
-    id: uuidv4(),
-    taskId: req.params.taskId,
-    content,
-    authorId,
-    createdAt: moment().format(),
-    updatedAt: moment().format()
-  };
-  comments.push(newComment);
-  res.json(newComment);
-});
-
-app.put('/api/comments/:id', (req, res) => {
-  const commentIndex = comments.findIndex(c => c.id === req.params.id);
-  if (commentIndex === -1) {
-    return res.status(404).json({ message: 'Комментарий не найден' });
-  }
-  
-  const updatedComment = {
-    ...comments[commentIndex],
-    content: req.body.content,
-    updatedAt: moment().format()
-  };
-  comments[commentIndex] = updatedComment;
-  res.json(updatedComment);
-});
-
-app.delete('/api/comments/:id', (req, res) => {
-  const commentIndex = comments.findIndex(c => c.id === req.params.id);
-  if (commentIndex === -1) {
-    return res.status(404).json({ message: 'Комментарий не найден' });
-  }
-  
-  comments.splice(commentIndex, 1);
-  res.json({ message: 'Комментарий удален' });
-});
-
-// Routes для проектов
-app.get('/api/projects', checkRole(['admin', 'manager', 'developer']), (req, res) => {
-  res.json(projects);
-});
-
-app.get('/api/projects/:id', checkRole(['admin', 'manager', 'developer']), (req, res) => {
-  const project = projects.find(p => p.id === req.params.id);
-  if (!project) {
-    return res.status(404).json({ message: 'Проект не найден' });
-  }
-  res.json(project);
-});
-
-app.post('/api/projects', checkRole(['admin', 'manager']), logAction('Создание проекта'), (req, res) => {
-  const { name, description, startDate, endDate, status = 'active', managerId } = req.body;
-  const newProject = {
-    id: uuidv4(),
-    name,
-    description,
-    startDate,
-    endDate,
-    status,
-    managerId,
-    createdAt: moment().format(),
-    updatedAt: moment().format()
-  };
-  projects.push(newProject);
-  res.json(newProject);
-});
-
-app.put('/api/projects/:id', checkRole(['admin', 'manager']), logAction('Обновление проекта'), (req, res) => {
-  const projectIndex = projects.findIndex(p => p.id === req.params.id);
-  if (projectIndex === -1) {
-    return res.status(404).json({ message: 'Проект не найден' });
-  }
-  
-  const updatedProject = {
-    ...projects[projectIndex],
-    ...req.body,
-    updatedAt: moment().format()
-  };
-  projects[projectIndex] = updatedProject;
-  res.json(updatedProject);
-});
-
-app.delete('/api/projects/:id', checkRole(['admin']), logAction('Удаление проекта'), (req, res) => {
-  const projectIndex = projects.findIndex(p => p.id === req.params.id);
-  if (projectIndex === -1) {
-    return res.status(404).json({ message: 'Проект не найден' });
-  }
-  
-  // Удаляем все задачи проекта
-  tasks = tasks.filter(task => task.projectId !== req.params.id);
-  projects.splice(projectIndex, 1);
-  res.json({ message: 'Проект удален' });
-});
-
-// Routes для задач
-app.get('/api/tasks', (req, res) => {
-  const { projectId } = req.query;
-  let filteredTasks = tasks;
-  
-  if (projectId) {
-    filteredTasks = tasks.filter(task => task.projectId === projectId);
-  }
-  
-  res.json(filteredTasks);
-});
-
-app.get('/api/tasks/:id', (req, res) => {
-  const task = tasks.find(t => t.id === req.params.id);
-  if (!task) {
-    return res.status(404).json({ message: 'Задача не найдена' });
-  }
-  res.json(task);
-});
-
-app.post('/api/tasks', (req, res) => {
-  const { title, description, priority = 'medium', status = 'todo', projectId, assigneeId, dueDate, parentTaskId } = req.body;
-  const newTask = {
-    id: uuidv4(),
-    title,
-    description,
-    priority,
-    status,
-    projectId,
-    assigneeId,
-    dueDate,
-    parentTaskId,
-    createdAt: moment().format(),
-    updatedAt: moment().format()
-  };
-  tasks.push(newTask);
-  res.json(newTask);
-});
-
-app.put('/api/tasks/:id', (req, res) => {
-  const taskIndex = tasks.findIndex(t => t.id === req.params.id);
-  if (taskIndex === -1) {
-    return res.status(404).json({ message: 'Задача не найдена' });
-  }
-  
-  const updatedTask = {
-    ...tasks[taskIndex],
-    ...req.body,
-    updatedAt: moment().format()
-  };
-  tasks[taskIndex] = updatedTask;
-  res.json(updatedTask);
-});
-
-// Обновление статуса задачи (для Kanban)
-app.patch('/api/tasks/:id/status', (req, res) => {
-  const { status } = req.body;
-  const taskIndex = tasks.findIndex(t => t.id === req.params.id);
-  
-  if (taskIndex === -1) {
-    return res.status(404).json({ message: 'Задача не найдена' });
-  }
-  
-  if (!['todo', 'in-progress', 'completed'].includes(status)) {
-    return res.status(400).json({ message: 'Неверный статус' });
-  }
-  
-  tasks[taskIndex] = {
-    ...tasks[taskIndex],
-    status,
-    updatedAt: moment().format()
-  };
-  
-  res.json(tasks[taskIndex]);
-});
-
-app.delete('/api/tasks/:id', (req, res) => {
-  const taskIndex = tasks.findIndex(t => t.id === req.params.id);
-  if (taskIndex === -1) {
-    return res.status(404).json({ message: 'Задача не найдена' });
-  }
-  
-  // Удаляем все подзадачи
-  tasks = tasks.filter(task => task.parentTaskId !== req.params.id);
-  tasks.splice(taskIndex, 1);
-  res.json({ message: 'Задача удалена' });
-});
-
-// Поиск
-app.get('/api/search', (req, res) => {
-  const { q: query, type } = req.query;
-  
-  if (!query || query.trim().length < 2) {
-    return res.json({ projects: [], tasks: [] });
-  }
-  
-  const searchTerm = query.toLowerCase().trim();
-  
-  // Поиск проектов
-  const matchingProjects = projects.filter(project => 
-    project.name.toLowerCase().includes(searchTerm) ||
-    project.description.toLowerCase().includes(searchTerm)
-  );
-  
-  // Поиск задач
-  const matchingTasks = tasks.filter(task => 
-    task.title.toLowerCase().includes(searchTerm) ||
-    task.description.toLowerCase().includes(searchTerm)
-  );
-  
-  // Если указан тип, фильтруем результат
-  if (type === 'projects') {
-    res.json({ projects: matchingProjects, tasks: [] });
-  } else if (type === 'tasks') {
-    res.json({ projects: [], tasks: matchingTasks });
-  } else {
-    res.json({ projects: matchingProjects, tasks: matchingTasks });
-  }
-});
-
-// Просроченные задачи
-app.get('/api/overdue-tasks', (req, res) => {
-  const now = new Date();
-  const overdueTasks = tasks.filter(task => {
-    if (!task.dueDate || task.status === 'completed') return false;
-    return new Date(task.dueDate) < now;
-  });
-  
-  res.json(overdueTasks);
-});
-
-// Задачи, истекающие сегодня
-app.get('/api/today-tasks', (req, res) => {
-  const today = moment().format('YYYY-MM-DD');
-  const todayTasks = tasks.filter(task => {
-    if (!task.dueDate || task.status === 'completed') return false;
-    return task.dueDate.startsWith(today);
-  });
-  
-  res.json(todayTasks);
-});
-
-// Экспорт данных
-app.get('/api/export/projects', (req, res) => {
-  const csvHeader = 'ID,Название,Описание,Статус,Дата начала,Дата окончания,Менеджер,Создан,Обновлен\n';
-  const csvData = projects.map(project => {
-    const manager = users.find(u => u.id === project.managerId);
-    return [
-      project.id,
-      `"${project.name}"`,
-      `"${project.description || ''}"`,
-      project.status,
-      project.startDate ? moment(project.startDate).format('DD.MM.YYYY') : '',
-      project.endDate ? moment(project.endDate).format('DD.MM.YYYY') : '',
-      manager ? `"${manager.name}"` : '',
-      moment(project.createdAt).format('DD.MM.YYYY HH:mm'),
-      moment(project.updatedAt).format('DD.MM.YYYY HH:mm')
-    ].join(',');
-  }).join('\n');
-  
-  const csv = csvHeader + csvData;
-  
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename=projects_${moment().format('YYYY-MM-DD')}.csv`);
-  res.send('\ufeff' + csv); // BOM для правильного отображения кириллицы в Excel
-});
-
-app.get('/api/export/tasks', (req, res) => {
-  const csvHeader = 'ID,Название,Описание,Приоритет,Статус,Проект,Исполнитель,Срок,Создан,Обновлен\n';
-  const csvData = tasks.map(task => {
-    const project = projects.find(p => p.id === task.projectId);
-    const assignee = users.find(u => u.id === task.assigneeId);
-    return [
-      task.id,
-      `"${task.title}"`,
-      `"${task.description || ''}"`,
-      task.priority,
-      task.status,
-      project ? `"${project.name}"` : '',
-      assignee ? `"${assignee.name}"` : '',
-      task.dueDate ? moment(task.dueDate).format('DD.MM.YYYY') : '',
-      moment(task.createdAt).format('DD.MM.YYYY HH:mm'),
-      moment(task.updatedAt).format('DD.MM.YYYY HH:mm')
-    ].join(',');
-  }).join('\n');
-  
-  const csv = csvHeader + csvData;
-  
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename=tasks_${moment().format('YYYY-MM-DD')}.csv`);
-  res.send('\ufeff' + csv); // BOM для правильного отображения кириллицы в Excel
-});
-
-app.get('/api/export/all', (req, res) => {
-  const csvHeader = 'Тип,ID,Название,Описание,Статус,Приоритет,Проект,Исполнитель,Срок,Создан,Обновлен\n';
-  
-  // Добавляем проекты
-  const projectsData = projects.map(project => {
-    const manager = users.find(u => u.id === project.managerId);
-    return [
-      'Проект',
-      project.id,
-      `"${project.name}"`,
-      `"${project.description || ''}"`,
-      project.status,
-      '',
-      '',
-      manager ? `"${manager.name}"` : '',
-      project.endDate ? moment(project.endDate).format('DD.MM.YYYY') : '',
-      moment(project.createdAt).format('DD.MM.YYYY HH:mm'),
-      moment(project.updatedAt).format('DD.MM.YYYY HH:mm')
-    ].join(',');
-  });
-  
-  // Добавляем задачи
-  const tasksData = tasks.map(task => {
-    const project = projects.find(p => p.id === task.projectId);
-    const assignee = users.find(u => u.id === task.assigneeId);
-    return [
-      'Задача',
-      task.id,
-      `"${task.title}"`,
-      `"${task.description || ''}"`,
-      task.status,
-      task.priority,
-      project ? `"${project.name}"` : '',
-      assignee ? `"${assignee.name}"` : '',
-      task.dueDate ? moment(task.dueDate).format('DD.MM.YYYY') : '',
-      moment(task.createdAt).format('DD.MM.YYYY HH:mm'),
-      moment(task.updatedAt).format('DD.MM.YYYY HH:mm')
-    ].join(',');
-  });
-  
-  const csv = csvHeader + projectsData.join('\n') + '\n' + tasksData.join('\n');
-  
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename=all_data_${moment().format('YYYY-MM-DD')}.csv`);
-  res.send('\ufeff' + csv); // BOM для правильного отображения кириллицы в Excel
-});
-
-// Статистика
-app.get('/api/stats', (req, res) => {
-  const totalProjects = projects.length;
-  const activeProjects = projects.filter(p => p.status === 'active').length;
-  const completedProjects = projects.filter(p => p.status === 'completed').length;
-  
-  const totalTasks = tasks.length;
-  const completedTasks = tasks.filter(t => t.status === 'completed').length;
-  const inProgressTasks = tasks.filter(t => t.status === 'in-progress').length;
-  const todoTasks = tasks.filter(t => t.status === 'todo').length;
-  
+app.get('/health', (req, res) => {
   res.json({
-    projects: {
-      total: totalProjects,
-      active: activeProjects,
-      completed: completedProjects
-    },
-    tasks: {
-      total: totalTasks,
-      completed: completedTasks,
-      inProgress: inProgressTasks,
-      todo: todoTasks
-    }
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
   });
 });
 
-// Маршрут для React приложения (должен быть последним)
+app.get('/health/ready', async (req, res) => {
+  try {
+    await db.get('SELECT 1');
+    res.json({ status: 'ready' });
+  } catch (error) {
+    res.status(503).json({ status: 'not ready', error: error.message });
+  }
+});
+
+// ============================================================================
+// API ROUTES - AUTHENTICATION
+// ============================================================================
+
+// Логин с валидацией и rate limiting
+app.post('/api/auth/login',
+  authLimiter,
+  [
+    body('email').trim().isEmail().normalizeEmail().withMessage('Некорректный email'),
+    body('password').isLength({ min: 6, max: 72 }).withMessage('Пароль должен быть от 6 до 72 символов')
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { email, password } = req.body;
+
+      const user = await db.get('SELECT * FROM users WHERE email = ?', [email]);
+      if (!user) {
+        return res.status(401).json({ message: 'Неверный email или пароль' });
+      }
+
+      const validPassword = await bcrypt.compare(password, user.password);
+      if (!validPassword) {
+        return res.status(401).json({ message: 'Неверный email или пароль' });
+      }
+
+      const token = jwt.sign(
+        { userId: user.id, email: user.email, role: user.role },
+        JWT_SECRET,
+        { expiresIn: '24h' }
+      );
+
+      const { password: _, ...userWithoutPassword } = user;
+      res.json({
+        message: 'Успешный вход в систему',
+        token,
+        user: userWithoutPassword
+      });
+    } catch (error) {
+      console.error('Ошибка входа:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+// Регистрация с валидацией
+app.post('/api/auth/register',
+  [
+    body('name').trim().isLength({ min: 2, max: 100 }).withMessage('Имя должно быть от 2 до 100 символов'),
+    body('email').trim().isEmail().normalizeEmail().withMessage('Некорректный email'),
+    body('password').isLength({ min: 8, max: 72 }).withMessage('Пароль должен быть от 8 до 72 символов'),
+    body('role').optional().isIn(['admin', 'manager', 'developer']).withMessage('Некорректная роль'),
+    body('department').optional().trim().isLength({ max: 100 }).withMessage('Отдел не более 100 символов'),
+    body('position').optional().trim().isLength({ max: 100 }).withMessage('Должность не более 100 символов')
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { name, email, password, role = 'developer', department, position } = req.body;
+
+      const existingUser = await db.get('SELECT * FROM users WHERE email = ?', [email]);
+      if (existingUser) {
+        return res.status(400).json({ message: 'Не удалось создать аккаунт' });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const userId = uuidv4();
+
+      await db.run(
+        'INSERT INTO users (id, name, email, password, role, department, position) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [userId, name, email, hashedPassword, role, department, position]
+      );
+
+      const token = jwt.sign(
+        { userId, email, role },
+        JWT_SECRET,
+        { expiresIn: '24h' }
+      );
+
+      const newUser = await db.get('SELECT id, name, email, role, department, position FROM users WHERE id = ?', [userId]);
+      res.status(201).json({
+        message: 'Пользователь создан успешно',
+        token,
+        user: newUser
+      });
+    } catch (error) {
+      console.error('Ошибка регистрации:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+// Проверка токена
+app.post('/api/auth/verify', authenticateToken, (req, res) => {
+  res.json({ valid: true, user: req.user });
+});
+
+// ============================================================================
+// API ROUTES - USERS (Protected)
+// ============================================================================
+
+app.get('/api/users',
+  authenticateToken,
+  checkRole(['admin', 'manager']),
+  async (req, res) => {
+    try {
+      const users = await db.all('SELECT id, name, email, role, department, position, createdAt FROM users ORDER BY name');
+      res.json(users);
+    } catch (error) {
+      console.error('Ошибка получения пользователей:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.post('/api/users',
+  authenticateToken,
+  checkRole(['admin']),
+  [
+    body('name').trim().isLength({ min: 2, max: 100 }),
+    body('email').trim().isEmail().normalizeEmail(),
+    body('password').isLength({ min: 8, max: 72 }),
+    body('role').isIn(['admin', 'manager', 'developer'])
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { name, email, password, role, department, position } = req.body;
+
+      const existingUser = await db.get('SELECT * FROM users WHERE email = ?', [email]);
+      if (existingUser) {
+        return res.status(400).json({ message: 'Пользователь с таким email уже существует' });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const userId = uuidv4();
+
+      await db.run(
+        'INSERT INTO users (id, name, email, password, role, department, position) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [userId, name, email, hashedPassword, role, department, position]
+      );
+
+      const newUser = await db.get('SELECT id, name, email, role, department, position FROM users WHERE id = ?', [userId]);
+      res.status(201).json(newUser);
+    } catch (error) {
+      console.error('Ошибка создания пользователя:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.put('/api/users/:id',
+  authenticateToken,
+  checkRole(['admin']),
+  [
+    param('id').isUUID(),
+    body('name').optional().trim().isLength({ min: 2, max: 100 }),
+    body('email').optional().trim().isEmail().normalizeEmail(),
+    body('role').optional().isIn(['admin', 'manager', 'developer'])
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { name, email, role, department, position } = req.body;
+
+      const user = await db.get('SELECT * FROM users WHERE id = ?', [req.params.id]);
+      if (!user) {
+        return res.status(404).json({ message: 'Пользователь не найден' });
+      }
+
+      await db.run(
+        'UPDATE users SET name = ?, email = ?, role = ?, department = ?, position = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+        [name || user.name, email || user.email, role || user.role, department, position, req.params.id]
+      );
+
+      const updatedUser = await db.get('SELECT id, name, email, role, department, position FROM users WHERE id = ?', [req.params.id]);
+      res.json(updatedUser);
+    } catch (error) {
+      console.error('Ошибка обновления пользователя:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.delete('/api/users/:id',
+  authenticateToken,
+  checkRole(['admin']),
+  [param('id').isUUID()],
+  validate,
+  async (req, res) => {
+    try {
+      const user = await db.get('SELECT * FROM users WHERE id = ?', [req.params.id]);
+      if (!user) {
+        return res.status(404).json({ message: 'Пользователь не найден' });
+      }
+
+      await db.run('DELETE FROM users WHERE id = ?', [req.params.id]);
+      res.json({ message: 'Пользователь удален' });
+    } catch (error) {
+      console.error('Ошибка удаления пользователя:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+// ============================================================================
+// API ROUTES - PROJECTS (Protected)
+// ============================================================================
+
+app.get('/api/projects',
+  authenticateToken,
+  apiLimiter,
+  async (req, res) => {
+    try {
+      const projects = await db.all('SELECT * FROM projects ORDER BY createdAt DESC');
+      res.json(projects);
+    } catch (error) {
+      console.error('Ошибка получения проектов:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.get('/api/projects/:id',
+  authenticateToken,
+  [param('id').isUUID()],
+  validate,
+  async (req, res) => {
+    try {
+      const project = await db.get('SELECT * FROM projects WHERE id = ?', [req.params.id]);
+      if (!project) {
+        return res.status(404).json({ message: 'Проект не найден' });
+      }
+      res.json(project);
+    } catch (error) {
+      console.error('Ошибка получения проекта:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.post('/api/projects',
+  authenticateToken,
+  checkRole(['admin', 'manager']),
+  [
+    body('name').trim().isLength({ min: 2, max: 200 }),
+    body('description').optional().trim().isLength({ max: 1000 }),
+    body('startDate').optional().isISO8601().toDate(),
+    body('endDate').optional().isISO8601().toDate(),
+    body('status').optional().isIn(['active', 'completed', 'paused']),
+    body('managerId').optional().isUUID()
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { name, description, startDate, endDate, status = 'active', managerId } = req.body;
+      const projectId = uuidv4();
+
+      await db.run(
+        'INSERT INTO projects (id, name, description, startDate, endDate, status, managerId, progress) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [projectId, name, description, startDate, endDate, status, managerId, 0]
+      );
+
+      const newProject = await db.get('SELECT * FROM projects WHERE id = ?', [projectId]);
+      res.status(201).json(newProject);
+    } catch (error) {
+      console.error('Ошибка создания проекта:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.put('/api/projects/:id',
+  authenticateToken,
+  checkRole(['admin', 'manager']),
+  [
+    param('id').isUUID(),
+    body('name').optional().trim().isLength({ min: 2, max: 200 }),
+    body('status').optional().isIn(['active', 'completed', 'paused'])
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const project = await db.get('SELECT * FROM projects WHERE id = ?', [req.params.id]);
+      if (!project) {
+        return res.status(404).json({ message: 'Проект не найден' });
+      }
+
+      const { name, description, startDate, endDate, status, managerId, progress } = req.body;
+
+      await db.run(
+        'UPDATE projects SET name = ?, description = ?, startDate = ?, endDate = ?, status = ?, managerId = ?, progress = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+        [
+          name || project.name,
+          description !== undefined ? description : project.description,
+          startDate || project.startDate,
+          endDate || project.endDate,
+          status || project.status,
+          managerId !== undefined ? managerId : project.managerId,
+          progress !== undefined ? progress : project.progress,
+          req.params.id
+        ]
+      );
+
+      const updatedProject = await db.get('SELECT * FROM projects WHERE id = ?', [req.params.id]);
+      res.json(updatedProject);
+    } catch (error) {
+      console.error('Ошибка обновления проекта:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.delete('/api/projects/:id',
+  authenticateToken,
+  checkRole(['admin']),
+  [param('id').isUUID()],
+  validate,
+  async (req, res) => {
+    try {
+      const project = await db.get('SELECT * FROM projects WHERE id = ?', [req.params.id]);
+      if (!project) {
+        return res.status(404).json({ message: 'Проект не найден' });
+      }
+
+      // Удаляем все связанные задачи (каскадное удаление через БД)
+      await db.run('DELETE FROM tasks WHERE projectId = ?', [req.params.id]);
+      await db.run('DELETE FROM projects WHERE id = ?', [req.params.id]);
+
+      res.json({ message: 'Проект удален' });
+    } catch (error) {
+      console.error('Ошибка удаления проекта:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+// ============================================================================
+// API ROUTES - TASKS (Protected)
+// ============================================================================
+
+app.get('/api/tasks',
+  authenticateToken,
+  apiLimiter,
+  [query('projectId').optional().isUUID()],
+  validate,
+  async (req, res) => {
+    try {
+      let query = 'SELECT * FROM tasks ORDER BY createdAt DESC';
+      let params = [];
+
+      if (req.query.projectId) {
+        query = 'SELECT * FROM tasks WHERE projectId = ? ORDER BY createdAt DESC';
+        params = [req.query.projectId];
+      }
+
+      const tasks = await db.all(query, params);
+      res.json(tasks);
+    } catch (error) {
+      console.error('Ошибка получения задач:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.get('/api/tasks/:id',
+  authenticateToken,
+  [param('id').isUUID()],
+  validate,
+  async (req, res) => {
+    try {
+      const task = await db.get('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
+      if (!task) {
+        return res.status(404).json({ message: 'Задача не найдена' });
+      }
+      res.json(task);
+    } catch (error) {
+      console.error('Ошибка получения задачи:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.post('/api/tasks',
+  authenticateToken,
+  [
+    body('title').trim().isLength({ min: 2, max: 200 }),
+    body('description').optional().trim().isLength({ max: 2000 }),
+    body('priority').optional().isIn(['low', 'medium', 'high']),
+    body('status').optional().isIn(['todo', 'in-progress', 'completed']),
+    body('projectId').isUUID(),
+    body('assigneeId').optional().isUUID(),
+    body('dueDate').optional().isISO8601().toDate()
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { title, description, priority = 'medium', status = 'todo', projectId, assigneeId, dueDate, parentTaskId } = req.body;
+      const taskId = uuidv4();
+
+      await db.run(
+        'INSERT INTO tasks (id, title, description, priority, status, projectId, assigneeId, dueDate, parentTaskId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [taskId, title, description, priority, status, projectId, assigneeId, dueDate, parentTaskId]
+      );
+
+      const newTask = await db.get('SELECT * FROM tasks WHERE id = ?', [taskId]);
+      res.status(201).json(newTask);
+    } catch (error) {
+      console.error('Ошибка создания задачи:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.put('/api/tasks/:id',
+  authenticateToken,
+  [
+    param('id').isUUID(),
+    body('title').optional().trim().isLength({ min: 2, max: 200 }),
+    body('priority').optional().isIn(['low', 'medium', 'high']),
+    body('status').optional().isIn(['todo', 'in-progress', 'completed'])
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const task = await db.get('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
+      if (!task) {
+        return res.status(404).json({ message: 'Задача не найдена' });
+      }
+
+      const { title, description, priority, status, assigneeId, dueDate } = req.body;
+
+      await db.run(
+        'UPDATE tasks SET title = ?, description = ?, priority = ?, status = ?, assigneeId = ?, dueDate = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+        [
+          title || task.title,
+          description !== undefined ? description : task.description,
+          priority || task.priority,
+          status || task.status,
+          assigneeId !== undefined ? assigneeId : task.assigneeId,
+          dueDate !== undefined ? dueDate : task.dueDate,
+          req.params.id
+        ]
+      );
+
+      const updatedTask = await db.get('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
+      res.json(updatedTask);
+    } catch (error) {
+      console.error('Ошибка обновления задачи:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.patch('/api/tasks/:id/status',
+  authenticateToken,
+  [
+    param('id').isUUID(),
+    body('status').isIn(['todo', 'in-progress', 'completed'])
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { status } = req.body;
+
+      const task = await db.get('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
+      if (!task) {
+        return res.status(404).json({ message: 'Задача не найдена' });
+      }
+
+      await db.run(
+        'UPDATE tasks SET status = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+        [status, req.params.id]
+      );
+
+      const updatedTask = await db.get('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
+      res.json(updatedTask);
+    } catch (error) {
+      console.error('Ошибка обновления статуса задачи:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.delete('/api/tasks/:id',
+  authenticateToken,
+  [param('id').isUUID()],
+  validate,
+  async (req, res) => {
+    try {
+      const task = await db.get('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
+      if (!task) {
+        return res.status(404).json({ message: 'Задача не найдена' });
+      }
+
+      // Удаляем комментарии и подзадачи (каскадное удаление)
+      await db.run('DELETE FROM comments WHERE taskId = ?', [req.params.id]);
+      await db.run('DELETE FROM tasks WHERE parentTaskId = ?', [req.params.id]);
+      await db.run('DELETE FROM tasks WHERE id = ?', [req.params.id]);
+
+      res.json({ message: 'Задача удалена' });
+    } catch (error) {
+      console.error('Ошибка удаления задачи:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+// ============================================================================
+// API ROUTES - COMMENTS (Protected)
+// ============================================================================
+
+app.get('/api/tasks/:taskId/comments',
+  authenticateToken,
+  [param('taskId').isUUID()],
+  validate,
+  async (req, res) => {
+    try {
+      const comments = await db.all(
+        'SELECT c.*, u.name as userName FROM comments c JOIN users u ON c.userId = u.id WHERE c.taskId = ? ORDER BY c.createdAt ASC',
+        [req.params.taskId]
+      );
+      res.json(comments);
+    } catch (error) {
+      console.error('Ошибка получения комментариев:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.post('/api/tasks/:taskId/comments',
+  authenticateToken,
+  [
+    param('taskId').isUUID(),
+    body('text').trim().isLength({ min: 1, max: 2000 })
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { text } = req.body;
+      const commentId = uuidv4();
+      const userId = req.user.userId;
+
+      await db.run(
+        'INSERT INTO comments (id, taskId, userId, text) VALUES (?, ?, ?, ?)',
+        [commentId, req.params.taskId, userId, text]
+      );
+
+      const newComment = await db.get(
+        'SELECT c.*, u.name as userName FROM comments c JOIN users u ON c.userId = u.id WHERE c.id = ?',
+        [commentId]
+      );
+      res.status(201).json(newComment);
+    } catch (error) {
+      console.error('Ошибка создания комментария:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.put('/api/comments/:id',
+  authenticateToken,
+  [
+    param('id').isUUID(),
+    body('text').trim().isLength({ min: 1, max: 2000 })
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const comment = await db.get('SELECT * FROM comments WHERE id = ?', [req.params.id]);
+      if (!comment) {
+        return res.status(404).json({ message: 'Комментарий не найден' });
+      }
+
+      // Проверка прав: только автор или admin могут редактировать
+      if (comment.userId !== req.user.userId && req.user.role !== 'admin') {
+        return res.status(403).json({ message: 'Нет прав для редактирования этого комментария' });
+      }
+
+      const { text } = req.body;
+      await db.run('UPDATE comments SET text = ? WHERE id = ?', [text, req.params.id]);
+
+      const updatedComment = await db.get(
+        'SELECT c.*, u.name as userName FROM comments c JOIN users u ON c.userId = u.id WHERE c.id = ?',
+        [req.params.id]
+      );
+      res.json(updatedComment);
+    } catch (error) {
+      console.error('Ошибка обновления комментария:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.delete('/api/comments/:id',
+  authenticateToken,
+  [param('id').isUUID()],
+  validate,
+  async (req, res) => {
+    try {
+      const comment = await db.get('SELECT * FROM comments WHERE id = ?', [req.params.id]);
+      if (!comment) {
+        return res.status(404).json({ message: 'Комментарий не найден' });
+      }
+
+      // Проверка прав: только автор или admin могут удалять
+      if (comment.userId !== req.user.userId && req.user.role !== 'admin') {
+        return res.status(403).json({ message: 'Нет прав для удаления этого комментария' });
+      }
+
+      await db.run('DELETE FROM comments WHERE id = ?', [req.params.id]);
+      res.json({ message: 'Комментарий удален' });
+    } catch (error) {
+      console.error('Ошибка удаления комментария:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+// ============================================================================
+// API ROUTES - TEMPLATES (Protected)
+// ============================================================================
+
+app.get('/api/templates',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const templates = await db.all('SELECT * FROM templates ORDER BY name');
+      res.json(templates);
+    } catch (error) {
+      console.error('Ошибка получения шаблонов:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.post('/api/templates',
+  authenticateToken,
+  checkRole(['admin', 'manager']),
+  [
+    body('name').trim().isLength({ min: 2, max: 200 }),
+    body('description').optional().trim().isLength({ max: 1000 }),
+    body('priority').optional().isIn(['low', 'medium', 'high']),
+    body('estimatedHours').optional().isInt({ min: 0 })
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { name, description, priority = 'medium', estimatedHours } = req.body;
+      const templateId = uuidv4();
+
+      await db.run(
+        'INSERT INTO templates (id, name, description, priority, estimatedHours) VALUES (?, ?, ?, ?, ?)',
+        [templateId, name, description, priority, estimatedHours]
+      );
+
+      const newTemplate = await db.get('SELECT * FROM templates WHERE id = ?', [templateId]);
+      res.status(201).json(newTemplate);
+    } catch (error) {
+      console.error('Ошибка создания шаблона:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.put('/api/templates/:id',
+  authenticateToken,
+  checkRole(['admin', 'manager']),
+  [
+    param('id').isUUID(),
+    body('name').optional().trim().isLength({ min: 2, max: 200 }),
+    body('priority').optional().isIn(['low', 'medium', 'high'])
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const template = await db.get('SELECT * FROM templates WHERE id = ?', [req.params.id]);
+      if (!template) {
+        return res.status(404).json({ message: 'Шаблон не найден' });
+      }
+
+      const { name, description, priority, estimatedHours } = req.body;
+
+      await db.run(
+        'UPDATE templates SET name = ?, description = ?, priority = ?, estimatedHours = ? WHERE id = ?',
+        [
+          name || template.name,
+          description !== undefined ? description : template.description,
+          priority || template.priority,
+          estimatedHours !== undefined ? estimatedHours : template.estimatedHours,
+          req.params.id
+        ]
+      );
+
+      const updatedTemplate = await db.get('SELECT * FROM templates WHERE id = ?', [req.params.id]);
+      res.json(updatedTemplate);
+    } catch (error) {
+      console.error('Ошибка обновления шаблона:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.delete('/api/templates/:id',
+  authenticateToken,
+  checkRole(['admin', 'manager']),
+  [param('id').isUUID()],
+  validate,
+  async (req, res) => {
+    try {
+      const template = await db.get('SELECT * FROM templates WHERE id = ?', [req.params.id]);
+      if (!template) {
+        return res.status(404).json({ message: 'Шаблон не найден' });
+      }
+
+      await db.run('DELETE FROM templates WHERE id = ?', [req.params.id]);
+      res.json({ message: 'Шаблон удален' });
+    } catch (error) {
+      console.error('Ошибка удаления шаблона:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+// ============================================================================
+// API ROUTES - STATISTICS & ANALYTICS (Protected)
+// ============================================================================
+
+app.get('/api/stats',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const totalProjects = await db.get('SELECT COUNT(*) as count FROM projects');
+      const activeProjects = await db.get("SELECT COUNT(*) as count FROM projects WHERE status = 'active'");
+      const completedProjects = await db.get("SELECT COUNT(*) as count FROM projects WHERE status = 'completed'");
+
+      const totalTasks = await db.get('SELECT COUNT(*) as count FROM tasks');
+      const completedTasks = await db.get("SELECT COUNT(*) as count FROM tasks WHERE status = 'completed'");
+      const inProgressTasks = await db.get("SELECT COUNT(*) as count FROM tasks WHERE status = 'in-progress'");
+      const todoTasks = await db.get("SELECT COUNT(*) as count FROM tasks WHERE status = 'todo'");
+
+      res.json({
+        projects: {
+          total: totalProjects.count,
+          active: activeProjects.count,
+          completed: completedProjects.count
+        },
+        tasks: {
+          total: totalTasks.count,
+          completed: completedTasks.count,
+          inProgress: inProgressTasks.count,
+          todo: todoTasks.count
+        }
+      });
+    } catch (error) {
+      console.error('Ошибка получения статистики:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.get('/api/search',
+  authenticateToken,
+  [
+    query('q').trim().isLength({ min: 2, max: 100 }),
+    query('type').optional().isIn(['projects', 'tasks'])
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { q: searchQuery, type } = req.query;
+      const searchTerm = `%${searchQuery}%`;
+
+      let projects = [];
+      let tasks = [];
+
+      if (!type || type === 'projects') {
+        projects = await db.all(
+          'SELECT * FROM projects WHERE name LIKE ? OR description LIKE ? LIMIT 50',
+          [searchTerm, searchTerm]
+        );
+      }
+
+      if (!type || type === 'tasks') {
+        tasks = await db.all(
+          'SELECT * FROM tasks WHERE title LIKE ? OR description LIKE ? LIMIT 50',
+          [searchTerm, searchTerm]
+        );
+      }
+
+      res.json({ projects, tasks });
+    } catch (error) {
+      console.error('Ошибка поиска:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.get('/api/overdue-tasks',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const now = new Date().toISOString();
+      const overdueTasks = await db.all(
+        "SELECT * FROM tasks WHERE dueDate < ? AND status != 'completed' ORDER BY dueDate ASC",
+        [now]
+      );
+      res.json(overdueTasks);
+    } catch (error) {
+      console.error('Ошибка получения просроченных задач:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.get('/api/today-tasks',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const today = moment().format('YYYY-MM-DD');
+      const todayTasks = await db.all(
+        "SELECT * FROM tasks WHERE date(dueDate) = ? AND status != 'completed' ORDER BY priority DESC",
+        [today]
+      );
+      res.json(todayTasks);
+    } catch (error) {
+      console.error('Ошибка получения задач на сегодня:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+// ============================================================================
+// API ROUTES - EXPORT (Protected)
+// ============================================================================
+
+app.get('/api/export/projects',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const projects = await db.all('SELECT * FROM projects');
+
+      // CSV с BOM для корректного отображения кириллицы в Excel
+      const header = 'ID,Name,Description,Start Date,End Date,Status,Manager ID,Progress,Created At,Updated At\n';
+      const rows = projects.map(p =>
+        `"${p.id}","${p.name}","${p.description || ''}","${p.startDate || ''}","${p.endDate || ''}","${p.status}","${p.managerId || ''}","${p.progress || 0}","${p.createdAt}","${p.updatedAt}"`
+      ).join('\n');
+
+      const csv = '\ufeff' + header + rows; // BOM для Excel
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename=projects.csv');
+      res.send(csv);
+    } catch (error) {
+      console.error('Ошибка экспорта проектов:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+app.get('/api/export/tasks',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const tasks = await db.all('SELECT * FROM tasks');
+
+      const header = 'ID,Title,Description,Priority,Status,Project ID,Assignee ID,Due Date,Parent Task ID,Created At,Updated At\n';
+      const rows = tasks.map(t =>
+        `"${t.id}","${t.title}","${t.description || ''}","${t.priority}","${t.status}","${t.projectId}","${t.assigneeId || ''}","${t.dueDate || ''}","${t.parentTaskId || ''}","${t.createdAt}","${t.updatedAt}"`
+      ).join('\n');
+
+      const csv = '\ufeff' + header + rows;
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename=tasks.csv');
+      res.send(csv);
+    } catch (error) {
+      console.error('Ошибка экспорта задач:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+// ============================================================================
+// ERROR HANDLING MIDDLEWARE (должен быть последним)
+// ============================================================================
+
+app.use((err, req, res, next) => {
+  const errorId = uuidv4();
+  console.error(`[ERROR ${errorId}]`, err);
+
+  if (err.message === 'Not allowed by CORS') {
+    return res.status(403).json({
+      errorId,
+      message: 'CORS policy error'
+    });
+  }
+
+  if (err.name === 'ValidationError') {
+    return res.status(400).json({
+      errorId,
+      message: 'Validation error',
+      details: err.details
+    });
+  }
+
+  res.status(err.status || 500).json({
+    errorId,
+    message: process.env.NODE_ENV === 'production'
+      ? 'Internal server error'
+      : err.message
+  });
+});
+
+// ============================================================================
+// REACT APP ROUTE (должен быть последним)
+// ============================================================================
+
 if (process.env.NODE_ENV === 'production') {
   app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '../client/build', 'index.html'));
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`Сервер запущен на порту ${PORT}`);
+// ============================================================================
+// SERVER INITIALIZATION
+// ============================================================================
+
+async function startServer() {
+  try {
+    await db.init();
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log('='.repeat(60));
+      console.log('🚀 PM Tool Server - Production Ready');
+      console.log('='.repeat(60));
+      console.log(`📡 Server running on port: ${PORT}`);
+      console.log(`📊 Database: ${db.dbPath}`);
+      console.log(`🌐 Access: http://localhost:${PORT}`);
+      console.log(`🔒 Security: Enabled (Helmet, CORS, Rate Limiting)`);
+      console.log(`🔐 Demo accounts:`);
+      console.log(`   Admin: admin@example.com / admin123`);
+      console.log(`   Manager: manager@example.com / manager123`);
+      console.log(`   Developer: developer@example.com / dev123`);
+      console.log('='.repeat(60));
+      console.log(`⚠️  Make sure JWT_SECRET is set in .env file!`);
+      console.log('='.repeat(60));
+    });
+  } catch (error) {
+    console.error('❌ Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+startServer();
+
+// ============================================================================
+// GRACEFUL SHUTDOWN
+// ============================================================================
+
+process.on('SIGINT', () => {
+  console.log('\n🛑 Shutting down gracefully...');
+  db.close();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('\n🛑 Shutting down gracefully...');
+  db.close();
+  process.exit(0);
+});
+
+// Обработка необработанных ошибок
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  process.exit(1);
 });

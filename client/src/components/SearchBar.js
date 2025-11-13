@@ -75,10 +75,30 @@ const SearchBar = ({ onClose }) => {
     return priorityMap[priority] || priority;
   };
 
-  const highlightText = (text, query) => {
-    if (!query) return text;
-    const regex = new RegExp(`(${query})`, 'gi');
-    return text.replace(regex, '<mark>$1</mark>');
+  // Безопасная подсветка текста без XSS уязвимости
+  const HighlightText = ({ text, query }) => {
+    if (!text) return null;
+    if (!query) return <>{text}</>;
+
+    try {
+      // Экранируем специальные символы regex
+      const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const parts = text.split(new RegExp(`(${escapedQuery})`, 'gi'));
+
+      return (
+        <>
+          {parts.map((part, index) => {
+            if (part.toLowerCase() === query.toLowerCase()) {
+              return <mark key={index}>{part}</mark>;
+            }
+            return <span key={index}>{part}</span>;
+          })}
+        </>
+      );
+    } catch (error) {
+      // Если regex невалидный, возвращаем обычный текст
+      return <>{text}</>;
+    }
   };
 
   return (
@@ -132,17 +152,12 @@ const SearchBar = ({ onClose }) => {
                         <Folder size={20} />
                       </div>
                       <div className="result-content">
-                        <h4 
-                          dangerouslySetInnerHTML={{ 
-                            __html: highlightText(project.name, query) 
-                          }}
-                        />
-                        <p 
-                          className="text-muted"
-                          dangerouslySetInnerHTML={{ 
-                            __html: highlightText(project.description || '', query) 
-                          }}
-                        />
+                        <h4>
+                          <HighlightText text={project.name} query={query} />
+                        </h4>
+                        <p className="text-muted">
+                          <HighlightText text={project.description || ''} query={query} />
+                        </p>
                         <div className="result-meta">
                           <span className={`badge ${getStatusBadge(project.status)}`}>
                             {getStatusText(project.status)}
@@ -171,17 +186,12 @@ const SearchBar = ({ onClose }) => {
                         <CheckSquare size={20} />
                       </div>
                       <div className="result-content">
-                        <h4 
-                          dangerouslySetInnerHTML={{ 
-                            __html: highlightText(task.title, query) 
-                          }}
-                        />
-                        <p 
-                          className="text-muted"
-                          dangerouslySetInnerHTML={{ 
-                            __html: highlightText(task.description || '', query) 
-                          }}
-                        />
+                        <h4>
+                          <HighlightText text={task.title} query={query} />
+                        </h4>
+                        <p className="text-muted">
+                          <HighlightText text={task.description || ''} query={query} />
+                        </p>
                         <div className="result-meta">
                           <span className={`badge ${getStatusBadge(task.status)}`}>
                             {getStatusText(task.status)}
