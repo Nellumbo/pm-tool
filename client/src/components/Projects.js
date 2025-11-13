@@ -4,6 +4,9 @@ import { Plus, Calendar, User, Edit, Trash2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import Pagination from './Pagination';
+import Loading, { ButtonLoading } from './Loading';
+import FormError, { FieldError } from './FormError';
+import { validateProjectForm } from '../utils/validation';
 import useApi from '../hooks/useApi';
 import {
   PROJECT_STATUS,
@@ -22,6 +25,8 @@ const Projects = () => {
   const [pagination, setPagination] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(20);
+  const [formErrors, setFormErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -67,17 +72,29 @@ const Projects = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
+
+    // Валидация формы
+    const { valid, errors } = validateProjectForm(formData);
+
+    if (!valid) {
+      setFormErrors(errors);
+      return;
+    }
+
+    setIsSubmitting(true);
+    setFormErrors({});
+
     try {
       if (editingProject) {
         await put(`/api/projects/${editingProject.id}`, formData);
       } else {
         await post('/api/projects', formData);
       }
-      
+
       await fetchData();
       setShowModal(false);
       setEditingProject(null);
+      setFormErrors({});
       setFormData({
         name: '',
         description: '',
@@ -88,6 +105,9 @@ const Projects = () => {
       });
     } catch (error) {
       console.error('Ошибка сохранения проекта:', error);
+      setFormErrors({ submit: error.message || 'Ошибка сохранения проекта' });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -139,7 +159,7 @@ const Projects = () => {
   };
 
   if (loading) {
-    return <div className="loading">Загрузка проектов...</div>;
+    return <Loading text="Загрузка проектов..." />;
   }
 
   return (
@@ -263,24 +283,29 @@ const Projects = () => {
             </div>
             
             <form onSubmit={handleSubmit}>
+              {formErrors.submit && <FormError error={formErrors.submit} onDismiss={() => setFormErrors({})} />}
+              {formErrors.dateRange && <FormError error={formErrors.dateRange} />}
+
               <div className="form-group">
                 <label>Название проекта</label>
                 <input
                   type="text"
-                  className="form-control"
+                  className={`form-control ${formErrors.name ? 'error' : ''}`}
                   value={formData.name}
                   onChange={(e) => setFormData({...formData, name: e.target.value})}
                   required
                 />
+                <FieldError error={formErrors.name} />
               </div>
               
               <div className="form-group">
                 <label>Описание</label>
                 <textarea
-                  className="form-control textarea"
+                  className={`form-control textarea ${formErrors.description ? 'error' : ''}`}
                   value={formData.description}
                   onChange={(e) => setFormData({...formData, description: e.target.value})}
                 />
+                <FieldError error={formErrors.description} />
               </div>
               
               <div className="grid grid-2">
@@ -347,8 +372,12 @@ const Projects = () => {
                 >
                   Отмена
                 </button>
-                <button type="submit" className="btn btn-primary">
-                  {editingProject ? 'Сохранить' : 'Создать'}
+                <button type="submit" className="btn btn-primary" disabled={isSubmitting}>
+                  {isSubmitting ? (
+                    <ButtonLoading text={editingProject ? 'Сохранение...' : 'Создание...'} />
+                  ) : (
+                    editingProject ? 'Сохранить' : 'Создать'
+                  )}
                 </button>
               </div>
             </form>

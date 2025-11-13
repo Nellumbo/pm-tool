@@ -5,6 +5,9 @@ import { ru } from 'date-fns/locale';
 import TaskTemplates from './TaskTemplates';
 import BulkActions from './BulkActions';
 import Pagination from './Pagination';
+import Loading, { ButtonLoading } from './Loading';
+import FormError, { FieldError } from './FormError';
+import { validateTaskForm } from '../utils/validation';
 import useApi from '../hooks/useApi';
 import {
   TASK_STATUS,
@@ -31,6 +34,8 @@ const Tasks = () => {
   const [pagination, setPagination] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(20);
+  const [formErrors, setFormErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -90,7 +95,18 @@ const Tasks = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
+
+    // Валидация формы
+    const { valid, errors } = validateTaskForm(formData);
+
+    if (!valid) {
+      setFormErrors(errors);
+      return;
+    }
+
+    setIsSubmitting(true);
+    setFormErrors({});
+
     try {
       if (editingTask) {
         await put(`/api/tasks/${editingTask.id}`, formData);
@@ -101,6 +117,7 @@ const Tasks = () => {
       await fetchData();
       setShowModal(false);
       setEditingTask(null);
+      setFormErrors({});
       setFormData({
         title: '',
         description: '',
@@ -113,6 +130,9 @@ const Tasks = () => {
       });
     } catch (error) {
       console.error('Ошибка сохранения задачи:', error);
+      setFormErrors({ submit: error.message || 'Ошибка сохранения задачи' });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -330,7 +350,7 @@ const Tasks = () => {
   };
 
   if (loading) {
-    return <div className="loading">Загрузка задач...</div>;
+    return <Loading text="Загрузка задач..." />;
   }
 
   return (
@@ -597,24 +617,28 @@ const Tasks = () => {
             </div>
             
             <form onSubmit={handleSubmit}>
+              {formErrors.submit && <FormError error={formErrors.submit} onDismiss={() => setFormErrors({})} />}
+
               <div className="form-group">
                 <label>Название задачи</label>
                 <input
                   type="text"
-                  className="form-control"
+                  className={`form-control ${formErrors.title ? 'error' : ''}`}
                   value={formData.title}
                   onChange={(e) => setFormData({...formData, title: e.target.value})}
                   required
                 />
+                <FieldError error={formErrors.title} />
               </div>
               
               <div className="form-group">
                 <label>Описание</label>
                 <textarea
-                  className="form-control textarea"
+                  className={`form-control textarea ${formErrors.description ? 'error' : ''}`}
                   value={formData.description}
                   onChange={(e) => setFormData({...formData, description: e.target.value})}
                 />
+                <FieldError error={formErrors.description} />
               </div>
               
               <div className="grid grid-2">
@@ -683,10 +707,11 @@ const Tasks = () => {
                 <label>Срок выполнения</label>
                 <input
                   type="date"
-                  className="form-control"
+                  className={`form-control ${formErrors.dueDate ? 'error' : ''}`}
                   value={formData.dueDate}
                   onChange={(e) => setFormData({...formData, dueDate: e.target.value})}
                 />
+                <FieldError error={formErrors.dueDate} />
               </div>
               
               <div className="modal-footer">
@@ -700,8 +725,12 @@ const Tasks = () => {
                 >
                   Отмена
                 </button>
-                <button type="submit" className="btn btn-primary">
-                  {editingTask ? 'Сохранить' : 'Создать'}
+                <button type="submit" className="btn btn-primary" disabled={isSubmitting}>
+                  {isSubmitting ? (
+                    <ButtonLoading text={editingTask ? 'Сохранение...' : 'Создание...'} />
+                  ) : (
+                    editingTask ? 'Сохранить' : 'Создать'
+                  )}
                 </button>
               </div>
             </form>

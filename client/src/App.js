@@ -5,6 +5,8 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { ToastProvider, useToast } from './contexts/ToastContext';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import ErrorBoundary from './components/ErrorBoundary';
+import Loading from './components/Loading';
 import Dashboard from './components/Dashboard';
 import Projects from './components/Projects';
 import Tasks from './components/Tasks';
@@ -43,7 +45,7 @@ const AppContent = () => {
   useKeyboardShortcuts(shortcuts);
 
   if (loading) {
-    return <div className="loading">Загрузка...</div>;
+    return <Loading fullscreen text="Загрузка приложения..." />;
   }
 
   if (!user) {
@@ -166,13 +168,15 @@ const AppContent = () => {
 
 const App = () => {
   return (
-    <ThemeProvider>
-      <ToastProvider>
-        <AuthProvider>
-          <AppContent />
-        </AuthProvider>
-      </ToastProvider>
-    </ThemeProvider>
+    <ErrorBoundary>
+      <ThemeProvider>
+        <ToastProvider>
+          <AuthProvider>
+            <AppContent />
+          </AuthProvider>
+        </ToastProvider>
+      </ThemeProvider>
+    </ErrorBoundary>
   );
 };
 
