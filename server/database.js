@@ -1,6 +1,7 @@
 const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
 const path = require('path');
+const { v4: uuid } = require('uuid');
 
 class Database {
   constructor() {
@@ -89,6 +90,24 @@ class Database {
         priority TEXT DEFAULT 'medium',
         estimatedHours INTEGER,
         createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`,
+
+      // Таблица меток (labels/tags)
+      `CREATE TABLE IF NOT EXISTS labels (
+        id TEXT PRIMARY KEY,
+        name TEXT UNIQUE NOT NULL,
+        color TEXT NOT NULL,
+        description TEXT,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`,
+
+      // Таблица связей задач и меток (многие-ко-многим)
+      `CREATE TABLE IF NOT EXISTS task_labels (
+        taskId TEXT NOT NULL,
+        labelId TEXT NOT NULL,
+        PRIMARY KEY (taskId, labelId),
+        FOREIGN KEY (taskId) REFERENCES tasks (id) ON DELETE CASCADE,
+        FOREIGN KEY (labelId) REFERENCES labels (id) ON DELETE CASCADE
       )`
     ];
 
@@ -187,6 +206,24 @@ class Database {
       await this.run(
         'INSERT INTO users (id, name, email, password, role, department, position) VALUES (?, ?, ?, ?, ?, ?, ?)',
         [user.id, user.name, user.email, user.password, user.role, user.department, user.position]
+      );
+    }
+
+    // Создаем демо-метки (labels)
+    const labels = [
+      { id: uuid(), name: 'bug', color: '#ef4444', description: 'Ошибка в коде или функционале' },
+      { id: uuid(), name: 'feature', color: '#3b82f6', description: 'Новая функциональность' },
+      { id: uuid(), name: 'urgent', color: '#f97316', description: 'Требует немедленного внимания' },
+      { id: uuid(), name: 'documentation', color: '#8b5cf6', description: 'Документация и описания' },
+      { id: uuid(), name: 'enhancement', color: '#10b981', description: 'Улучшение существующего функционала' },
+      { id: uuid(), name: 'testing', color: '#f59e0b', description: 'Тестирование и QA' },
+      { id: uuid(), name: 'design', color: '#ec4899', description: 'Дизайн и UI/UX' }
+    ];
+
+    for (const label of labels) {
+      await this.run(
+        'INSERT OR IGNORE INTO labels (id, name, color, description) VALUES (?, ?, ?, ?)',
+        [label.id, label.name, label.color, label.description]
       );
     }
 
@@ -308,6 +345,24 @@ class Database {
       await this.run(
         'INSERT INTO comments (id, taskId, userId, text) VALUES (?, ?, ?, ?)',
         [comment.id, comment.taskId, comment.userId, comment.text]
+      );
+    }
+
+    // Добавляем метки к демо-задачам
+    const taskLabels = [
+      { taskId: '1', labelId: labels[4].id }, // Дизайн UI - enhancement
+      { taskId: '1', labelId: labels[6].id }, // Дизайн UI - design
+      { taskId: '1', labelId: labels[2].id }, // Дизайн UI - urgent
+      { taskId: '2', labelId: labels[1].id }, // Настройка БД - feature
+      { taskId: '3', labelId: labels[5].id }, // Тестирование API - testing
+      { taskId: '3', labelId: labels[2].id }, // Тестирование API - urgent
+      { taskId: '4', labelId: labels[3].id }  // Документация API - documentation
+    ];
+
+    for (const taskLabel of taskLabels) {
+      await this.run(
+        'INSERT OR IGNORE INTO task_labels (taskId, labelId) VALUES (?, ?)',
+        [taskLabel.taskId, taskLabel.labelId]
       );
     }
 

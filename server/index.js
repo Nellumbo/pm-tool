@@ -680,8 +680,9 @@ app.delete('/api/tasks/:id',
         return res.status(404).json({ message: 'Задача не найдена' });
       }
 
-      // Удаляем комментарии и подзадачи (каскадное удаление)
+      // Удаляем комментарии, метки и подзадачи (каскадное удаление)
       await db.run('DELETE FROM comments WHERE taskId = ?', [req.params.id]);
+      await db.run('DELETE FROM task_labels WHERE taskId = ?', [req.params.id]);
       await db.run('DELETE FROM tasks WHERE parentTaskId = ?', [req.params.id]);
       await db.run('DELETE FROM tasks WHERE id = ?', [req.params.id]);
 
@@ -904,6 +905,255 @@ app.delete('/api/templates/:id',
       res.json({ message: 'Шаблон удален' });
     } catch (error) {
       console.error('Ошибка удаления шаблона:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+// ============================================================================
+// API ROUTES - LABELS (Protected)
+// ============================================================================
+
+// Вспомогательная функция для валидации hex color
+const isValidHexColor = (color) => {
+  return /^#[0-9A-F]{6}$/i.test(color);
+};
+
+// GET /api/labels - получить все метки
+app.get('/api/labels',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const labels = await db.all('SELECT * FROM labels ORDER BY name');
+      res.json(labels);
+    } catch (error) {
+      console.error('Ошибка получения меток:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+// POST /api/labels - создать новую метку
+app.post('/api/labels',
+  authenticateToken,
+  [
+    body('name').trim().isLength({ min: 2, max: 50 }).withMessage('Название метки должно быть от 2 до 50 символов'),
+    body('color').custom((value) => {
+      if (!isValidHexColor(value)) {
+        throw new Error('Цвет должен быть в формате #RRGGBB');
+      }
+      return true;
+    }),
+    body('description').optional().trim().isLength({ max: 500 }).withMessage('Описание метки не должно превышать 500 символов')
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { name, color, description } = req.body;
+
+      // Проверяем уникальность имени метки
+      const existingLabel = await db.get('SELECT * FROM labels WHERE name = ?', [name]);
+      if (existingLabel) {
+        return res.status(400).json({ message: 'Метка с таким именем уже существует' });
+      }
+
+      const labelId = uuidv4();
+
+      await db.run(
+        'INSERT INTO labels (id, name, color, description) VALUES (?, ?, ?, ?)',
+        [labelId, name, color, description || null]
+      );
+
+      const newLabel = await db.get('SELECT * FROM labels WHERE id = ?', [labelId]);
+      res.status(201).json(newLabel);
+    } catch (error) {
+      console.error('Ошибка создания метки:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+// PUT /api/labels/:id - обновить метку
+app.put('/api/labels/:id',
+  authenticateToken,
+  checkRole(['admin', 'manager']),
+  [
+    param('id').isUUID(),
+    body('name').optional().trim().isLength({ min: 2, max: 50 }),
+    body('color').optional().custom((value) => {
+      if (value && !isValidHexColor(value)) {
+        throw new Error('Цвет должен быть в формате #RRGGBB');
+      }
+      return true;
+    }),
+    body('description').optional().trim().isLength({ max: 500 }).withMessage('Описание метки не должно превышать 500 символов')
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const label = await db.get('SELECT * FROM labels WHERE id = ?', [req.params.id]);
+      if (!label) {
+        return res.status(404).json({ message: 'Метка не найдена' });
+      }
+
+      const { name, color, description } = req.body;
+
+      // Проверяем уникальность имени, если оно изменяется
+      if (name && name !== label.name) {
+        const existingLabel = await db.get('SELECT * FROM labels WHERE name = ?', [name]);
+        if (existingLabel) {
+          return res.status(400).json({ message: 'Метка с таким именем уже существует' });
+        }
+      }
+
+      await db.run(
+        'UPDATE labels SET name = ?, color = ?, description = ? WHERE id = ?',
+        [
+          name || label.name,
+          color || label.color,
+          description !== undefined ? description : label.description,
+          req.params.id
+        ]
+      );
+
+      const updatedLabel = await db.get('SELECT * FROM labels WHERE id = ?', [req.params.id]);
+      res.json(updatedLabel);
+    } catch (error) {
+      console.error('Ошибка обновления метки:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+// DELETE /api/labels/:id - удалить метку
+app.delete('/api/labels/:id',
+  authenticateToken,
+  checkRole(['admin']),
+  [param('id').isUUID()],
+  validate,
+  async (req, res) => {
+    try {
+      const label = await db.get('SELECT * FROM labels WHERE id = ?', [req.params.id]);
+      if (!label) {
+        return res.status(404).json({ message: 'Метка не найдена' });
+      }
+
+      // Сначала удаляем все связи с задачами
+      await db.run('DELETE FROM task_labels WHERE labelId = ?', [req.params.id]);
+
+      // Затем удаляем саму метку
+      await db.run('DELETE FROM labels WHERE id = ?', [req.params.id]);
+
+      res.json({ message: 'Метка удалена' });
+    } catch (error) {
+      console.error('Ошибка удаления метки:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+// GET /api/tasks/:taskId/labels - получить метки задачи
+app.get('/api/tasks/:taskId/labels',
+  authenticateToken,
+  [param('taskId').isUUID()],
+  validate,
+  async (req, res) => {
+    try {
+      // Проверяем существование задачи
+      const task = await db.get('SELECT * FROM tasks WHERE id = ?', [req.params.taskId]);
+      if (!task) {
+        return res.status(404).json({ message: 'Задача не найдена' });
+      }
+
+      const labels = await db.all(
+        `SELECT l.* FROM labels l
+         INNER JOIN task_labels tl ON l.id = tl.labelId
+         WHERE tl.taskId = ?
+         ORDER BY l.name`,
+        [req.params.taskId]
+      );
+
+      res.json(labels);
+    } catch (error) {
+      console.error('Ошибка получения меток задачи:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+// POST /api/tasks/:taskId/labels/:labelId - добавить метку к задаче
+app.post('/api/tasks/:taskId/labels/:labelId',
+  authenticateToken,
+  [
+    param('taskId').isUUID(),
+    param('labelId').isUUID()
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      // Проверяем существование задачи
+      const task = await db.get('SELECT * FROM tasks WHERE id = ?', [req.params.taskId]);
+      if (!task) {
+        return res.status(404).json({ message: 'Задача не найдена' });
+      }
+
+      // Проверяем существование метки
+      const label = await db.get('SELECT * FROM labels WHERE id = ?', [req.params.labelId]);
+      if (!label) {
+        return res.status(404).json({ message: 'Метка не найдена' });
+      }
+
+      // Проверяем, не добавлена ли уже метка к задаче
+      const existingRelation = await db.get(
+        'SELECT * FROM task_labels WHERE taskId = ? AND labelId = ?',
+        [req.params.taskId, req.params.labelId]
+      );
+
+      if (existingRelation) {
+        return res.status(400).json({ message: 'Метка уже добавлена к этой задаче' });
+      }
+
+      await db.run(
+        'INSERT INTO task_labels (taskId, labelId) VALUES (?, ?)',
+        [req.params.taskId, req.params.labelId]
+      );
+
+      res.status(201).json({ message: 'Метка добавлена к задаче', label });
+    } catch (error) {
+      console.error('Ошибка добавления метки к задаче:', error.message);
+      res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+    }
+  }
+);
+
+// DELETE /api/tasks/:taskId/labels/:labelId - удалить метку из задачи
+app.delete('/api/tasks/:taskId/labels/:labelId',
+  authenticateToken,
+  [
+    param('taskId').isUUID(),
+    param('labelId').isUUID()
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      // Проверяем существование связи
+      const relation = await db.get(
+        'SELECT * FROM task_labels WHERE taskId = ? AND labelId = ?',
+        [req.params.taskId, req.params.labelId]
+      );
+
+      if (!relation) {
+        return res.status(404).json({ message: 'Метка не найдена у этой задачи' });
+      }
+
+      await db.run(
+        'DELETE FROM task_labels WHERE taskId = ? AND labelId = ?',
+        [req.params.taskId, req.params.labelId]
+      );
+
+      res.json({ message: 'Метка удалена из задачи' });
+    } catch (error) {
+      console.error('Ошибка удаления метки из задачи:', error.message);
       res.status(500).json({ message: 'Внутренняя ошибка сервера' });
     }
   }

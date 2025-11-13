@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Calendar, User, Edit, Trash2, CheckCircle, Circle, Clock, FileText } from 'lucide-react';
+import { Plus, Calendar, User, Edit, Trash2, CheckCircle, Circle, Clock, FileText, Square, CheckSquare } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import TaskTemplates from './TaskTemplates';
+import BulkActions from './BulkActions';
 import useApi from '../hooks/useApi';
 
 const Tasks = () => {
@@ -16,6 +17,7 @@ const Tasks = () => {
   const [editingTask, setEditingTask] = useState(null);
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterProject, setFilterProject] = useState('all');
+  const [selectedTasks, setSelectedTasks] = useState([]);
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -140,6 +142,106 @@ const Tasks = () => {
     setShowModal(true);
   };
 
+  // Bulk Actions Handlers
+  const toggleTaskSelection = (taskId) => {
+    setSelectedTasks(prev =>
+      prev.includes(taskId)
+        ? prev.filter(id => id !== taskId)
+        : [...prev, taskId]
+    );
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedTasks.length === filteredTasks.length) {
+      setSelectedTasks([]);
+    } else {
+      setSelectedTasks(filteredTasks.map(task => task.id));
+    }
+  };
+
+  const clearSelection = () => {
+    setSelectedTasks([]);
+  };
+
+  const handleBulkDelete = async () => {
+    try {
+      await Promise.all(
+        selectedTasks.map(taskId => deleteApi(`/api/tasks/${taskId}`))
+      );
+      await fetchData();
+      setSelectedTasks([]);
+    } catch (error) {
+      console.error('Ошибка массового удаления:', error);
+      alert('Произошла ошибка при удалении задач');
+    }
+  };
+
+  const handleBulkStatusChange = async (newStatus) => {
+    try {
+      await Promise.all(
+        selectedTasks.map(taskId =>
+          put(`/api/tasks/${taskId}`, { status: newStatus })
+        )
+      );
+      await fetchData();
+      setSelectedTasks([]);
+    } catch (error) {
+      console.error('Ошибка массового изменения статуса:', error);
+      alert('Произошла ошибка при изменении статуса задач');
+    }
+  };
+
+  const handleBulkPriorityChange = async (newPriority) => {
+    try {
+      await Promise.all(
+        selectedTasks.map(taskId =>
+          put(`/api/tasks/${taskId}`, { priority: newPriority })
+        )
+      );
+      await fetchData();
+      setSelectedTasks([]);
+    } catch (error) {
+      console.error('Ошибка массового изменения приоритета:', error);
+      alert('Произошла ошибка при изменении приоритета задач');
+    }
+  };
+
+  const handleBulkAssignUser = async (userId) => {
+    try {
+      await Promise.all(
+        selectedTasks.map(taskId =>
+          put(`/api/tasks/${taskId}`, { assigneeId: userId || null })
+        )
+      );
+      await fetchData();
+      setSelectedTasks([]);
+    } catch (error) {
+      console.error('Ошибка массового назначения:', error);
+      alert('Произошла ошибка при назначении исполнителя');
+    }
+  };
+
+  const handleBulkAddLabel = async (label) => {
+    try {
+      // Note: This is a placeholder. If your API supports labels, update accordingly
+      await Promise.all(
+        selectedTasks.map(taskId => {
+          const task = tasks.find(t => t.id === taskId);
+          const currentDescription = task?.description || '';
+          const newDescription = currentDescription
+            ? `${currentDescription}\n\nМетка: ${label}`
+            : `Метка: ${label}`;
+          return put(`/api/tasks/${taskId}`, { description: newDescription });
+        })
+      );
+      await fetchData();
+      setSelectedTasks([]);
+    } catch (error) {
+      console.error('Ошибка добавления метки:', error);
+      alert('Произошла ошибка при добавлении метки');
+    }
+  };
+
   const getStatusBadge = (status) => {
     const statusMap = {
       'todo': 'badge-secondary',
@@ -231,7 +333,7 @@ const Tasks = () => {
         </div>
       </div>
 
-      {/* Фильтры */}
+      {/* Фильтры и выбор всех */}
       <div className="card mb-3">
         <div className="grid grid-3">
           <div className="form-group">
@@ -247,7 +349,7 @@ const Tasks = () => {
               <option value="completed">Завершено</option>
             </select>
           </div>
-          
+
           <div className="form-group">
             <label>Проект</label>
             <select
@@ -263,11 +365,11 @@ const Tasks = () => {
               ))}
             </select>
           </div>
-          
+
           <div className="form-group">
             <label>&nbsp;</label>
             <div className="flex flex-gap">
-              <button 
+              <button
                 className="btn btn-secondary"
                 onClick={() => {
                   setFilterStatus('all');
@@ -279,6 +381,32 @@ const Tasks = () => {
             </div>
           </div>
         </div>
+
+        {filteredTasks.length > 0 && (
+          <div className="select-all-section">
+            <button
+              className="select-all-btn"
+              onClick={toggleSelectAll}
+            >
+              {selectedTasks.length === filteredTasks.length ? (
+                <CheckSquare size={18} className="text-primary" />
+              ) : (
+                <Square size={18} />
+              )}
+              <span>
+                {selectedTasks.length === filteredTasks.length
+                  ? 'Снять выделение со всех'
+                  : `Выбрать все (${filteredTasks.length})`
+                }
+              </span>
+            </button>
+            {selectedTasks.length > 0 && (
+              <span className="selection-info">
+                Выбрано: {selectedTasks.length} из {filteredTasks.length}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {filteredTasks.length === 0 ? (
@@ -301,42 +429,58 @@ const Tasks = () => {
         </div>
       ) : (
         <div className="task-list">
-          {filteredTasks.map(task => (
-            <div key={task.id} className="card task-card">
-              <div className="flex flex-between flex-center mb-2">
-                <div className="flex flex-center flex-gap">
-                  <button
-                    className="status-toggle"
-                    onClick={() => {
-                      const newStatus = task.status === 'completed' ? 'todo' : 'completed';
-                      handleStatusChange(task.id, newStatus);
-                    }}
-                  >
-                    {getStatusIcon(task.status)}
-                  </button>
-                  <h3 className={task.status === 'completed' ? 'completed' : ''}>{task.title}</h3>
+          {filteredTasks.map(task => {
+            const isSelected = selectedTasks.includes(task.id);
+            return (
+              <div
+                key={task.id}
+                className={`card task-card ${isSelected ? 'task-selected' : ''}`}
+              >
+                <div className="flex flex-between flex-center mb-2">
+                  <div className="flex flex-center flex-gap">
+                    <button
+                      className="task-checkbox"
+                      onClick={() => toggleTaskSelection(task.id)}
+                      title={isSelected ? 'Снять выделение' : 'Выбрать задачу'}
+                    >
+                      {isSelected ? (
+                        <CheckSquare size={20} className="text-primary" />
+                      ) : (
+                        <Square size={20} className="text-muted" />
+                      )}
+                    </button>
+                    <button
+                      className="status-toggle"
+                      onClick={() => {
+                        const newStatus = task.status === 'completed' ? 'todo' : 'completed';
+                        handleStatusChange(task.id, newStatus);
+                      }}
+                    >
+                      {getStatusIcon(task.status)}
+                    </button>
+                    <h3 className={task.status === 'completed' ? 'completed' : ''}>{task.title}</h3>
+                  </div>
+
+                  <div className="flex flex-gap">
+                    <button
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => openEditModal(task)}
+                    >
+                      <Edit size={14} />
+                    </button>
+                    <button
+                      className="btn btn-sm btn-danger"
+                      onClick={() => handleDelete(task.id)}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
-                
-                <div className="flex flex-gap">
-                  <button 
-                    className="btn btn-sm btn-secondary"
-                    onClick={() => openEditModal(task)}
-                  >
-                    <Edit size={14} />
-                  </button>
-                  <button 
-                    className="btn btn-sm btn-danger"
-                    onClick={() => handleDelete(task.id)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </div>
-              
+
               {task.description && (
                 <p className="text-muted mb-2">{task.description}</p>
               )}
-              
+
               <div className="task-meta">
                 <div className="flex flex-gap mb-2">
                   <span className={`badge ${getStatusBadge(task.status)}`}>
@@ -349,7 +493,7 @@ const Tasks = () => {
                     {getProjectName(task.projectId)}
                   </span>
                 </div>
-                
+
                 <div className="task-details">
                   {task.assigneeId && (
                     <div className="flex flex-center mb-1">
@@ -357,7 +501,7 @@ const Tasks = () => {
                       <span className="text-muted ml-1">{getUserName(task.assigneeId)}</span>
                     </div>
                   )}
-                  
+
                   {task.dueDate && (
                     <div className="flex flex-center">
                       <Calendar size={16} className="text-muted" />
@@ -369,9 +513,23 @@ const Tasks = () => {
                 </div>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
+
+      {/* Bulk Actions Bar */}
+      <BulkActions
+        selectedTasks={selectedTasks}
+        onClearSelection={clearSelection}
+        onBulkDelete={handleBulkDelete}
+        onBulkStatusChange={handleBulkStatusChange}
+        onBulkPriorityChange={handleBulkPriorityChange}
+        onBulkAssignUser={handleBulkAssignUser}
+        onBulkAddLabel={handleBulkAddLabel}
+        users={users}
+        projects={projects}
+      />
 
       {/* Шаблоны задач */}
       {showTemplates && (
@@ -524,7 +682,7 @@ const Tasks = () => {
           justify-content: center;
           z-index: 1000;
         }
-        
+
         .modal {
           background: white;
           border-radius: 8px;
@@ -533,7 +691,7 @@ const Tasks = () => {
           max-height: 90vh;
           overflow-y: auto;
         }
-        
+
         .modal-header {
           display: flex;
           justify-content: space-between;
@@ -541,7 +699,7 @@ const Tasks = () => {
           padding: 20px;
           border-bottom: 1px solid #e1e8ed;
         }
-        
+
         .modal-footer {
           display: flex;
           justify-content: flex-end;
@@ -549,38 +707,117 @@ const Tasks = () => {
           padding: 20px;
           border-top: 1px solid #e1e8ed;
         }
-        
+
+        .select-all-section {
+          border-top: 1px solid #e1e8ed;
+          padding: 16px 0 0 0;
+          margin-top: 16px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+        }
+
+        .select-all-btn {
+          background: none;
+          border: none;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 12px;
+          border-radius: 6px;
+          font-size: 14px;
+          font-weight: 500;
+          transition: all 0.2s ease;
+          color: #333;
+        }
+
+        .select-all-btn:hover {
+          background: #f0f0f0;
+        }
+
+        .selection-info {
+          font-size: 14px;
+          color: #6c757d;
+          font-weight: 500;
+        }
+
         .task-card {
           border-left: 4px solid #007bff;
+          transition: all 0.2s ease;
         }
-        
+
+        .task-card.task-selected {
+          background: linear-gradient(to right, rgba(0, 123, 255, 0.05), transparent);
+          border-left-color: #007bff;
+          box-shadow: 0 2px 8px rgba(0, 123, 255, 0.15);
+        }
+
         .task-card.completed {
           border-left-color: #28a745;
         }
-        
+
+        .task-checkbox {
+          background: none;
+          border: none;
+          cursor: pointer;
+          padding: 0;
+          display: flex;
+          align-items: center;
+          transition: all 0.2s ease;
+        }
+
+        .task-checkbox:hover {
+          transform: scale(1.1);
+        }
+
         .status-toggle {
           background: none;
           border: none;
           cursor: pointer;
           padding: 0;
         }
-        
+
         .completed {
           text-decoration: line-through;
           opacity: 0.7;
         }
-        
+
         .task-meta {
           border-top: 1px solid #f0f0f0;
           padding-top: 15px;
         }
-        
+
         .task-details {
           margin-top: 10px;
         }
-        
+
         .ml-1 {
           margin-left: 8px;
+        }
+
+        .text-primary {
+          color: #007bff;
+        }
+
+        .text-muted {
+          color: #6c757d;
+        }
+
+        @media (max-width: 768px) {
+          .select-all-section {
+            flex-direction: column;
+            align-items: stretch;
+          }
+
+          .select-all-btn {
+            justify-content: center;
+          }
+
+          .selection-info {
+            text-align: center;
+          }
         }
       `}</style>
     </div>

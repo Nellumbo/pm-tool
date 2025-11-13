@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
-import { Calendar, Plus, Folder, CheckSquare, Users, BarChart3, Search, Download, Kanban, TrendingUp, Settings, LogOut } from 'lucide-react';
+import { BrowserRouter as Router, Routes, Route, Link, useNavigate } from 'react-router-dom';
+import { Calendar, Plus, Folder, CheckSquare, Users, BarChart3, Search, Download, Kanban, TrendingUp, Settings, LogOut, Moon, Sun } from 'lucide-react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ThemeProvider, useTheme } from './contexts/ThemeContext';
+import { ToastProvider, useToast } from './contexts/ToastContext';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import Dashboard from './components/Dashboard';
 import Projects from './components/Projects';
 import Tasks from './components/Tasks';
@@ -18,26 +21,26 @@ import './App.css';
 
 const AppContent = () => {
   const { user, logout, loading } = useAuth();
+  const { theme, toggleTheme } = useTheme();
+  const { toast } = useToast();
+  const navigate = useNavigate();
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [showSearch, setShowSearch] = useState(false);
   const [showExport, setShowExport] = useState(false);
 
-  // Горячие клавиши - всегда вызываем useEffect перед условными возвратами
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault();
-        setShowSearch(true);
-      }
-      if (e.key === 'Escape') {
-        setShowSearch(false);
-        setShowExport(false);
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  // Global keyboard shortcuts
+  const shortcuts = {
+    'ctrl+k': () => setShowSearch(true),
+    '/': () => setShowSearch(true),
+    'esc': () => {
+      setShowSearch(false);
+      setShowExport(false);
+    },
+    'ctrl+h': () => navigate('/'),
+    'ctrl+p': () => navigate('/projects'),
+    'ctrl+t': () => navigate('/tasks')
+  };
+  useKeyboardShortcuts(shortcuts);
 
   if (loading) {
     return <div className="loading">Загрузка...</div>;
@@ -96,7 +99,14 @@ const AppContent = () => {
               <h1>{navigation.find(n => n.id === currentPage)?.label || 'Панель управления'}</h1>
             <div className="header-actions">
               <NotificationCenter />
-              <button 
+              <button
+                className="btn btn-secondary"
+                onClick={toggleTheme}
+                title={`Переключить тему (${theme === 'light' ? 'Светлая' : 'Темная'})`}
+              >
+                {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
+              </button>
+              <button
                 className="btn btn-secondary"
                 onClick={() => setShowSearch(true)}
                 title="Поиск (Ctrl+K)"
@@ -104,7 +114,7 @@ const AppContent = () => {
                 <Search size={16} />
                 Поиск
               </button>
-              <button 
+              <button
                 className="btn btn-secondary"
                 onClick={() => setShowExport(true)}
                 title="Экспорт данных"
@@ -116,7 +126,7 @@ const AppContent = () => {
                 <Plus size={16} />
                 Создать
               </button>
-              <button 
+              <button
                 className="btn btn-danger"
                 onClick={logout}
                 title="Выйти"
@@ -156,9 +166,13 @@ const AppContent = () => {
 
 const App = () => {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <ThemeProvider>
+      <ToastProvider>
+        <AuthProvider>
+          <AppContent />
+        </AuthProvider>
+      </ToastProvider>
+    </ThemeProvider>
   );
 };
 
