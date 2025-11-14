@@ -74,11 +74,12 @@ class Database {
       `CREATE TABLE IF NOT EXISTS comments (
         id TEXT PRIMARY KEY,
         taskId TEXT NOT NULL,
-        userId TEXT NOT NULL,
-        text TEXT NOT NULL,
+        authorId TEXT NOT NULL,
+        content TEXT NOT NULL,
         createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (taskId) REFERENCES tasks (id),
-        FOREIGN KEY (userId) REFERENCES users (id)
+        FOREIGN KEY (authorId) REFERENCES users (id)
       )`,
 
       // Таблица шаблонов задач
@@ -87,8 +88,10 @@ class Database {
         name TEXT NOT NULL,
         description TEXT,
         priority TEXT DEFAULT 'medium',
+        category TEXT,
         estimatedHours INTEGER,
-        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
       )`
     ];
 
@@ -287,27 +290,27 @@ class Database {
       {
         id: '1',
         taskId: '1',
-        userId: '3',
-        text: 'Начал работу над дизайном главного экрана. Первые наброски готовы.'
+        authorId: '3',
+        content: 'Начал работу над дизайном главного экрана. Первые наброски готовы.'
       },
       {
         id: '2',
         taskId: '1',
-        userId: '2',
-        text: 'Отличная работа! Учти замечания по UX из фидбека пользователей.'
+        authorId: '2',
+        content: 'Отличная работа! Учти замечания по UX из фидбека пользователей.'
       },
       {
         id: '3',
         taskId: '2',
-        userId: '4',
-        text: 'База данных настроена, все миграции применены успешно.'
+        authorId: '4',
+        content: 'База данных настроена, все миграции применены успешно.'
       }
     ];
 
     for (const comment of demoComments) {
       await this.run(
-        'INSERT INTO comments (id, taskId, userId, text) VALUES (?, ?, ?, ?)',
-        [comment.id, comment.taskId, comment.userId, comment.text]
+        'INSERT INTO comments (id, taskId, authorId, content) VALUES (?, ?, ?, ?)',
+        [comment.id, comment.taskId, comment.authorId, comment.content]
       );
     }
 

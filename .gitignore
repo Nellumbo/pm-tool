@@ -25,6 +25,12 @@ yarn-error.log*
 *.key
 *.pem
 
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+/server/*.db
+
 # IDE and editor files
 .vscode/
 .idea/

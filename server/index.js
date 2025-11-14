@@ -7,13 +7,24 @@ const moment = require('moment');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const Database = require('./database');
+const validation = require('./middleware/validation');
 
 // Загружаем переменные окружения
 require('dotenv').config();
 
+// Валидация обязательных переменных окружения
+const requiredEnvVars = ['JWT_SECRET'];
+const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+if (missingEnvVars.length > 0) {
+  console.error(`ОШИБКА: Отсутствуют обязательные переменные окружения: ${missingEnvVars.join(', ')}`);
+  console.error('Создайте файл .env на основе env.example и задайте все необходимые значения');
+  process.exit(1);
+}
+
 const app = express();
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET || 'demo-secret-key-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET;
 
 // Middleware
 app.use(cors());
@@ -46,22 +57,16 @@ const authenticateToken = (req, res, next) => {
 // Middleware для проверки ролей
 const checkRole = (allowedRoles) => {
   return (req, res, next) => {
-    // Если используется JWT аутентификация
-    if (req.user) {
-      if (allowedRoles.includes(req.user.role)) {
-        next();
-      } else {
-        res.status(403).json({ message: 'Недостаточно прав для выполнения операции' });
-      }
+    // Проверяем наличие аутентифицированного пользователя
+    if (!req.user) {
+      return res.status(401).json({ message: 'Требуется аутентификация' });
+    }
+
+    // Проверяем роль пользователя
+    if (allowedRoles.includes(req.user.role)) {
+      next();
     } else {
-      // Fallback для демонстрации (заголовок)
-      const userRole = req.headers['x-user-role'] || 'developer';
-      if (allowedRoles.includes(userRole)) {
-        req.userRole = userRole;
-        next();
-      } else {
-        res.status(403).json({ message: 'Недостаточно прав для выполнения операции' });
-      }
+      res.status(403).json({ message: 'Недостаточно прав для выполнения операции' });
     }
   };
 };
@@ -70,8 +75,8 @@ const checkRole = (allowedRoles) => {
 const logAction = (action) => {
   return (req, res, next) => {
     const timestamp = moment().format('YYYY-MM-DD HH:mm:ss');
-    const userRole = req.headers['x-user-role'] || 'developer';
-    console.log(`[${timestamp}] ${userRole}: ${action} - ${req.method} ${req.path}`);
+    const userName = req.user ? `${req.user.name} (${req.user.role})` : 'Неавторизован';
+    console.log(`[${timestamp}] ${userName}: ${action} - ${req.method} ${req.path}`);
     next();
   };
 };
@@ -79,350 +84,54 @@ const logAction = (action) => {
 // Инициализация базы данных
 const db = new Database();
 
-// Добавляем тестовые данные
-projects = [
-  {
-    id: '1',
-    name: 'Разработка веб-приложения',
-    description: 'Создание современного веб-приложения для управления проектами с использованием React и Node.js',
-    startDate: moment().subtract(30, 'days').format('YYYY-MM-DD'),
-    endDate: moment().add(60, 'days').format('YYYY-MM-DD'),
-    status: 'active',
-    managerId: '2', // Менеджер проектов
-    createdAt: moment().subtract(30, 'days').format(),
-    updatedAt: moment().format()
-  },
-  {
-    id: '2',
-    name: 'Мобильное приложение',
-    description: 'Разработка мобильного приложения для iOS и Android с синхронизацией данных',
-    startDate: moment().subtract(15, 'days').format('YYYY-MM-DD'),
-    endDate: moment().add(90, 'days').format('YYYY-MM-DD'),
-    status: 'active',
-    managerId: '2', // Менеджер проектов
-    createdAt: moment().subtract(15, 'days').format(),
-    updatedAt: moment().format()
-  },
-  {
-    id: '3',
-    name: 'Система аналитики',
-    description: 'Внедрение системы аналитики и отчетности для отслеживания KPI',
-    startDate: moment().subtract(45, 'days').format('YYYY-MM-DD'),
-    endDate: moment().subtract(5, 'days').format('YYYY-MM-DD'),
-    status: 'completed',
-    managerId: '1', // Администратор
-    createdAt: moment().subtract(45, 'days').format(),
-    updatedAt: moment().subtract(5, 'days').format()
+// Инициализируем БД при старте
+(async () => {
+  try {
+    await db.init();
+    console.log('База данных инициализирована успешно');
+  } catch (error) {
+    console.error('Ошибка инициализации базы данных:', error);
+    process.exit(1);
   }
-];
+})();
 
-tasks = [
-  // Задачи для проекта "Разработка веб-приложения"
-  {
-    id: '1',
-    title: 'Настройка инфраструктуры',
-    description: 'Настройка сервера разработки, установка зависимостей и настройка CI/CD',
-    priority: 'high',
-    status: 'completed',
-    projectId: '1',
-    assigneeId: '1', // Администратор
-    dueDate: moment().subtract(25, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(30, 'days').format(),
-    updatedAt: moment().subtract(25, 'days').format()
-  },
-  {
-    id: '2',
-    title: 'Создание дизайн-системы',
-    description: 'Разработка UI/UX дизайна, создание компонентной библиотеки',
-    priority: 'high',
-    status: 'in-progress',
-    projectId: '1',
-    assigneeId: '3', // Разработчик
-    dueDate: moment().add(10, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(28, 'days').format(),
-    updatedAt: moment().subtract(2, 'days').format()
-  },
-  {
-    id: '3',
-    title: 'API для аутентификации',
-    description: 'Реализация JWT аутентификации, регистрация и авторизация пользователей',
-    priority: 'high',
-    status: 'completed',
-    projectId: '1',
-    assigneeId: '3', // Разработчик
-    dueDate: moment().subtract(20, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(25, 'days').format(),
-    updatedAt: moment().subtract(20, 'days').format()
-  },
-  {
-    id: '4',
-    title: 'Frontend компоненты',
-    description: 'Создание основных React компонентов для интерфейса',
-    priority: 'medium',
-    status: 'in-progress',
-    projectId: '1',
-    assigneeId: '3', // Разработчик
-    dueDate: moment().add(15, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(20, 'days').format(),
-    updatedAt: moment().subtract(1, 'days').format()
-  },
-  {
-    id: '5',
-    title: 'Интеграционные тесты',
-    description: 'Написание и запуск интеграционных тестов для API',
-    priority: 'medium',
-    status: 'todo',
-    projectId: '1',
-    assigneeId: '4', // Тестировщик
-    dueDate: moment().add(20, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(15, 'days').format(),
-    updatedAt: moment().subtract(15, 'days').format()
-  },
-  
-  // Задачи для проекта "Мобильное приложение"
-  {
-    id: '6',
-    title: 'Архитектура приложения',
-    description: 'Проектирование архитектуры мобильного приложения, выбор технологий',
-    priority: 'high',
-    status: 'completed',
-    projectId: '2',
-    assigneeId: '3', // Разработчик
-    dueDate: moment().subtract(10, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(15, 'days').format(),
-    updatedAt: moment().subtract(10, 'days').format()
-  },
-  {
-    id: '7',
-    title: 'UI/UX дизайн мобильного приложения',
-    description: 'Создание дизайна экранов и пользовательских сценариев',
-    priority: 'medium',
-    status: 'in-progress',
-    projectId: '2',
-    assigneeId: '3', // Разработчик
-    dueDate: moment().add(25, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(12, 'days').format(),
-    updatedAt: moment().subtract(1, 'days').format()
-  },
-  {
-    id: '8',
-    title: 'Настройка синхронизации данных',
-    description: 'Реализация синхронизации между мобильным приложением и сервером',
-    priority: 'high',
-    status: 'todo',
-    projectId: '2',
-    assigneeId: '3', // Разработчик
-    dueDate: moment().add(40, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(8, 'days').format(),
-    updatedAt: moment().subtract(8, 'days').format()
-  },
-  
-  // Задачи для завершенного проекта "Система аналитики"
-  {
-    id: '9',
-    title: 'Исследование требований',
-    description: 'Анализ бизнес-требований и выбор инструментов аналитики',
-    priority: 'high',
-    status: 'completed',
-    projectId: '3',
-    assigneeId: '2', // Менеджер проектов
-    dueDate: moment().subtract(40, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(45, 'days').format(),
-    updatedAt: moment().subtract(40, 'days').format()
-  },
-  {
-    id: '10',
-    title: 'Внедрение Google Analytics',
-    description: 'Настройка и интеграция Google Analytics для отслеживания метрик',
-    priority: 'medium',
-    status: 'completed',
-    projectId: '3',
-    assigneeId: '3', // Разработчик
-    dueDate: moment().subtract(20, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(35, 'days').format(),
-    updatedAt: moment().subtract(20, 'days').format()
-  },
-  {
-    id: '11',
-    title: 'Создание дашборда отчетов',
-    description: 'Разработка дашборда для визуализации аналитических данных',
-    priority: 'high',
-    status: 'completed',
-    projectId: '3',
-    assigneeId: '3', // Разработчик
-    dueDate: moment().subtract(10, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(25, 'days').format(),
-    updatedAt: moment().subtract(10, 'days').format()
-  },
-  {
-    id: '12',
-    title: 'Тестирование системы аналитики',
-    description: 'Комплексное тестирование всех компонентов системы аналитики',
-    priority: 'medium',
-    status: 'completed',
-    projectId: '3',
-    assigneeId: '4', // Тестировщик
-    dueDate: moment().subtract(5, 'days').format('YYYY-MM-DD'),
-    createdAt: moment().subtract(15, 'days').format(),
-    updatedAt: moment().subtract(5, 'days').format()
-  }
-];
-
-// Добавляем тестовые комментарии
-comments = [
-  {
-    id: '1',
-    taskId: '2',
-    content: 'Начал работу над дизайн-системой. Создал базовые компоненты кнопок и форм.',
-    authorId: '3', // Разработчик
-    createdAt: moment().subtract(5, 'days').format(),
-    updatedAt: moment().subtract(5, 'days').format()
-  },
-  {
-    id: '2',
-    taskId: '2',
-    content: 'Нужно добавить поддержку темной темы в дизайн-систему.',
-    authorId: '1', // Администратор
-    createdAt: moment().subtract(3, 'days').format(),
-    updatedAt: moment().subtract(3, 'days').format()
-  },
-  {
-    id: '3',
-    taskId: '4',
-    content: 'Создал основные компоненты: Header, Sidebar, Modal. Осталось доделать таблицы.',
-    authorId: '3', // Разработчик
-    createdAt: moment().subtract(1, 'days').format(),
-    updatedAt: moment().subtract(1, 'days').format()
-  },
-  {
-    id: '4',
-    taskId: '7',
-    content: 'Дизайн экранов готов. Жду фидбека от заказчика.',
-    authorId: '3', // Разработчик
-    createdAt: moment().subtract(2, 'days').format(),
-    updatedAt: moment().subtract(2, 'days').format()
-  },
-  {
-    id: '5',
-    taskId: '5',
-    content: 'Начну писать тесты на следующей неделе.',
-    authorId: '4', // Тестировщик
-    createdAt: moment().subtract(1, 'days').format(),
-    updatedAt: moment().subtract(1, 'days').format()
-  }
-];
+// УДАЛЕНО: Старые in-memory массивы заменены на SQLite БД
+// Все данные теперь хранятся в базе данных SQLite
 
 // Хешируем пароли для демонстрации (в реальном приложении это делается при регистрации)
 const hashPassword = async (password) => {
   return await bcrypt.hash(password, 10);
 };
 
-// Создаем пользователей с хешированными паролями
-let users = [
-  {
-    id: '1',
-    name: 'Администратор',
-    email: 'admin@example.com',
-    password: '$2b$10$FNd6iKn/Yxq7UtatAgTaZuHg3QIfnt1u6b/JL9KfNyVIWV3/nrywC', // admin123
-    role: 'admin',
-    department: 'Управление',
-    position: 'Администратор системы'
-  },
-  {
-    id: '2',
-    name: 'Менеджер проектов',
-    email: 'manager@example.com',
-    password: '$2b$10$KXP9dDOxT6CHhsMq6phOvuSSDTFMR7zN3jYv3XD3S6Pexgdmew6Dm', // manager123
-    role: 'manager',
-    department: 'Управление проектами',
-    position: 'Менеджер проектов'
-  },
-  {
-    id: '3',
-    name: 'Разработчик',
-    email: 'developer@example.com',
-    password: '$2b$10$XRXiMM8Zbdyl2D2cNQA9N.RSw9oDnXeGM9Rm6VTB1IgNO8GLSM3Oe', // dev123
-    role: 'developer',
-    department: 'Разработка',
-    position: 'Разработчик'
-  },
-  {
-    id: '4',
-    name: 'Тестировщик',
-    email: 'tester@example.com',
-    password: '$2b$10$RlGL.6MIvap1eRQJPesfbOYv4fgSIlUUJyLqVWKeY9lwychCTmf.q', // test123
-    role: 'developer',
-    department: 'QA',
-    position: 'Тестировщик'
-  }
-];
-let templates = [
-  {
-    id: '1',
-    name: 'Разработка функционала',
-    description: 'Создание новой функциональности',
-    priority: 'high',
-    category: 'development'
-  },
-  {
-    id: '2',
-    name: 'Исправление ошибки',
-    description: 'Исправление бага в системе',
-    priority: 'high',
-    category: 'bugfix'
-  },
-  {
-    id: '3',
-    name: 'Тестирование',
-    description: 'Проведение тестирования функционала',
-    priority: 'medium',
-    category: 'testing'
-  },
-  {
-    id: '4',
-    name: 'Документация',
-    description: 'Создание или обновление документации',
-    priority: 'low',
-    category: 'documentation'
-  },
-  {
-    id: '5',
-    name: 'Встреча с клиентом',
-    description: 'Проведение встречи с заказчиком',
-    priority: 'medium',
-    category: 'meeting'
-  }
-];
-
 // Аутентификация
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', validation.loginValidation, async (req, res) => {
   try {
     const { email, password } = req.body;
-    
-    // Находим пользователя
-    const user = users.find(u => u.email === email);
+
+    // Находим пользователя в БД
+    const user = await db.get('SELECT * FROM users WHERE email = ?', [email]);
     if (!user) {
       return res.status(401).json({ message: 'Неверный email или пароль' });
     }
-    
+
     // Проверяем пароль
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) {
       return res.status(401).json({ message: 'Неверный email или пароль' });
     }
-    
+
     // Создаем JWT токен
     const token = jwt.sign(
-      { 
-        id: user.id, 
-        email: user.email, 
+      {
+        id: user.id,
+        email: user.email,
         role: user.role,
-        name: user.name 
+        name: user.name
       },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
-    
+
     // Возвращаем пользователя без пароля
     const { password: _, ...userWithoutPassword } = user;
     res.json({
@@ -435,45 +144,41 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', validation.registerValidation, async (req, res) => {
   try {
     const { name, email, password, role = 'developer', department, position } = req.body;
-    
-    // Проверяем, существует ли пользователь
-    const existingUser = users.find(u => u.email === email);
+
+    // Проверяем, существует ли пользователь в БД
+    const existingUser = await db.get('SELECT * FROM users WHERE email = ?', [email]);
     if (existingUser) {
       return res.status(400).json({ message: 'Пользователь с таким email уже существует' });
     }
-    
+
     // Хешируем пароль
-    const hashedPassword = await hashPassword(password);
-    
-    // Создаем пользователя
-    const newUser = {
-      id: uuidv4(),
-      name,
-      email,
-      password: hashedPassword,
-      role,
-      department,
-      position,
-      createdAt: moment().format()
-    };
-    
-    users.push(newUser);
-    
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Создаем пользователя в БД
+    const newUserId = uuidv4();
+    await db.run(
+      'INSERT INTO users (id, name, email, password, role, department, position) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [newUserId, name, email, hashedPassword, role, department, position]
+    );
+
+    // Получаем созданного пользователя
+    const newUser = await db.get('SELECT * FROM users WHERE id = ?', [newUserId]);
+
     // Создаем JWT токен
     const token = jwt.sign(
-      { 
-        id: newUser.id, 
-        email: newUser.email, 
+      {
+        id: newUser.id,
+        email: newUser.email,
         role: newUser.role,
-        name: newUser.name 
+        name: newUser.name
       },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
-    
+
     // Возвращаем пользователя без пароля
     const { password: _, ...userWithoutPassword } = newUser;
     res.json({
@@ -491,472 +196,690 @@ app.post('/api/auth/verify', authenticateToken, (req, res) => {
 });
 
 // Routes для пользователей
-app.get('/api/users', authenticateToken, checkRole(['admin', 'manager']), (req, res) => {
-  // Возвращаем пользователей без паролей
-  const usersWithoutPasswords = users.map(user => {
-    const { password, ...userWithoutPassword } = user;
-    return userWithoutPassword;
-  });
-  res.json(usersWithoutPasswords);
-});
-
-app.post('/api/users', checkRole(['admin']), logAction('Создание пользователя'), (req, res) => {
-  const { name, email, role = 'developer', department, position } = req.body;
-  const newUser = {
-    id: uuidv4(),
-    name,
-    email,
-    role,
-    department,
-    position,
-    createdAt: moment().format()
-  };
-  users.push(newUser);
-  res.json(newUser);
-});
-
-app.put('/api/users/:id', checkRole(['admin']), logAction('Обновление пользователя'), (req, res) => {
-  const userIndex = users.findIndex(u => u.id === req.params.id);
-  if (userIndex === -1) {
-    return res.status(404).json({ message: 'Пользователь не найден' });
+app.get('/api/users', authenticateToken, checkRole(['admin', 'manager']), async (req, res) => {
+  try {
+    // Получаем пользователей из БД
+    const users = await db.all('SELECT id, name, email, role, department, position, createdAt, updatedAt FROM users');
+    res.json(users);
+  } catch (error) {
+    console.error('Ошибка получения пользователей:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
   }
-  
-  const updatedUser = {
-    ...users[userIndex],
-    ...req.body,
-    updatedAt: moment().format()
-  };
-  users[userIndex] = updatedUser;
-  res.json(updatedUser);
 });
 
-app.delete('/api/users/:id', checkRole(['admin']), logAction('Удаление пользователя'), (req, res) => {
-  const userIndex = users.findIndex(u => u.id === req.params.id);
-  if (userIndex === -1) {
-    return res.status(404).json({ message: 'Пользователь не найден' });
+app.post('/api/users', authenticateToken, checkRole(['admin']), logAction('Создание пользователя'), validation.userValidation, async (req, res) => {
+  try {
+    const { name, email, password = 'password123', role = 'developer', department, position } = req.body;
+
+    // Проверяем, существует ли пользователь
+    const existingUser = await db.get('SELECT * FROM users WHERE email = ?', [email]);
+    if (existingUser) {
+      return res.status(400).json({ message: 'Пользователь с таким email уже существует' });
+    }
+
+    // Хешируем пароль
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Создаем пользователя в БД
+    const newUserId = uuidv4();
+    await db.run(
+      'INSERT INTO users (id, name, email, password, role, department, position) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [newUserId, name, email, hashedPassword, role, department, position]
+    );
+
+    // Получаем созданного пользователя
+    const newUser = await db.get(
+      'SELECT id, name, email, role, department, position, createdAt, updatedAt FROM users WHERE id = ?',
+      [newUserId]
+    );
+    res.json(newUser);
+  } catch (error) {
+    console.error('Ошибка создания пользователя:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
   }
-  
-  users.splice(userIndex, 1);
-  res.json({ message: 'Пользователь удален' });
+});
+
+app.put('/api/users/:id', authenticateToken, checkRole(['admin']), logAction('Обновление пользователя'), validation.userValidation, async (req, res) => {
+  try {
+    const { name, email, role, department, position } = req.body;
+
+    // Проверяем существование пользователя
+    const user = await db.get('SELECT * FROM users WHERE id = ?', [req.params.id]);
+    if (!user) {
+      return res.status(404).json({ message: 'Пользователь не найден' });
+    }
+
+    // Обновляем пользователя
+    await db.run(
+      'UPDATE users SET name = ?, email = ?, role = ?, department = ?, position = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+      [name || user.name, email || user.email, role || user.role, department || user.department, position || user.position, req.params.id]
+    );
+
+    // Получаем обновленного пользователя
+    const updatedUser = await db.get(
+      'SELECT id, name, email, role, department, position, createdAt, updatedAt FROM users WHERE id = ?',
+      [req.params.id]
+    );
+    res.json(updatedUser);
+  } catch (error) {
+    console.error('Ошибка обновления пользователя:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+  }
+});
+
+app.delete('/api/users/:id', authenticateToken, checkRole(['admin']), logAction('Удаление пользователя'), async (req, res) => {
+  try {
+    // Проверяем существование пользователя
+    const user = await db.get('SELECT * FROM users WHERE id = ?', [req.params.id]);
+    if (!user) {
+      return res.status(404).json({ message: 'Пользователь не найден' });
+    }
+
+    // Удаляем пользователя
+    await db.run('DELETE FROM users WHERE id = ?', [req.params.id]);
+    res.json({ message: 'Пользователь удален' });
+  } catch (error) {
+    console.error('Ошибка удаления пользователя:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+  }
 });
 
 // Шаблоны задач
-app.get('/api/templates', (req, res) => {
-  const { category } = req.query;
-  
-  if (category) {
-    const filteredTemplates = templates.filter(t => t.category === category);
-    res.json(filteredTemplates);
-  } else {
+app.get('/api/templates', authenticateToken, async (req, res) => {
+  try {
+    const { category } = req.query;
+
+    let query = 'SELECT * FROM templates';
+    let params = [];
+
+    if (category) {
+      query += ' WHERE category = ?';
+      params.push(category);
+    }
+
+    const templates = await db.all(query, params);
     res.json(templates);
+  } catch (error) {
+    console.error('Ошибка получения шаблонов:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
   }
 });
 
-app.post('/api/templates', (req, res) => {
-  const { name, description, priority = 'medium', category } = req.body;
-  const newTemplate = {
-    id: uuidv4(),
-    name,
-    description,
-    priority,
-    category,
-    createdAt: moment().format()
-  };
-  templates.push(newTemplate);
-  res.json(newTemplate);
+app.post('/api/templates', authenticateToken, validation.templateValidation, async (req, res) => {
+  try {
+    const { name, description, priority = 'medium', category, estimatedHours } = req.body;
+    const newTemplateId = uuidv4();
+
+    await db.run(
+      'INSERT INTO templates (id, name, description, priority, category, estimatedHours) VALUES (?, ?, ?, ?, ?, ?)',
+      [newTemplateId, name, description, priority, category, estimatedHours]
+    );
+
+    const newTemplate = await db.get('SELECT * FROM templates WHERE id = ?', [newTemplateId]);
+    res.json(newTemplate);
+  } catch (error) {
+    console.error('Ошибка создания шаблона:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+  }
 });
 
-app.put('/api/templates/:id', (req, res) => {
-  const templateIndex = templates.findIndex(t => t.id === req.params.id);
-  if (templateIndex === -1) {
-    return res.status(404).json({ message: 'Шаблон не найден' });
+app.put('/api/templates/:id', authenticateToken, validation.templateValidation, async (req, res) => {
+  try {
+    const template = await db.get('SELECT * FROM templates WHERE id = ?', [req.params.id]);
+    if (!template) {
+      return res.status(404).json({ message: 'Шаблон не найден' });
+    }
+
+    const { name, description, priority, category, estimatedHours } = req.body;
+
+    await db.run(
+      'UPDATE templates SET name = ?, description = ?, priority = ?, category = ?, estimatedHours = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+      [
+        name || template.name,
+        description !== undefined ? description : template.description,
+        priority || template.priority,
+        category || template.category,
+        estimatedHours !== undefined ? estimatedHours : template.estimatedHours,
+        req.params.id
+      ]
+    );
+
+    const updatedTemplate = await db.get('SELECT * FROM templates WHERE id = ?', [req.params.id]);
+    res.json(updatedTemplate);
+  } catch (error) {
+    console.error('Ошибка обновления шаблона:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
   }
-  
-  const updatedTemplate = {
-    ...templates[templateIndex],
-    ...req.body,
-    updatedAt: moment().format()
-  };
-  templates[templateIndex] = updatedTemplate;
-  res.json(updatedTemplate);
 });
 
-app.delete('/api/templates/:id', (req, res) => {
-  const templateIndex = templates.findIndex(t => t.id === req.params.id);
-  if (templateIndex === -1) {
-    return res.status(404).json({ message: 'Шаблон не найден' });
+app.delete('/api/templates/:id', authenticateToken, async (req, res) => {
+  try {
+    const template = await db.get('SELECT * FROM templates WHERE id = ?', [req.params.id]);
+    if (!template) {
+      return res.status(404).json({ message: 'Шаблон не найден' });
+    }
+
+    await db.run('DELETE FROM templates WHERE id = ?', [req.params.id]);
+    res.json({ message: 'Шаблон удален' });
+  } catch (error) {
+    console.error('Ошибка удаления шаблона:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
   }
-  
-  templates.splice(templateIndex, 1);
-  res.json({ message: 'Шаблон удален' });
 });
 
 // Комментарии к задачам
-app.get('/api/tasks/:taskId/comments', (req, res) => {
-  const taskComments = comments.filter(c => c.taskId === req.params.taskId);
-  res.json(taskComments);
-});
-
-app.post('/api/tasks/:taskId/comments', (req, res) => {
-  const { content, authorId } = req.body;
-  const newComment = {
-    id: uuidv4(),
-    taskId: req.params.taskId,
-    content,
-    authorId,
-    createdAt: moment().format(),
-    updatedAt: moment().format()
-  };
-  comments.push(newComment);
-  res.json(newComment);
-});
-
-app.put('/api/comments/:id', (req, res) => {
-  const commentIndex = comments.findIndex(c => c.id === req.params.id);
-  if (commentIndex === -1) {
-    return res.status(404).json({ message: 'Комментарий не найден' });
+app.get('/api/tasks/:taskId/comments', authenticateToken, async (req, res) => {
+  try {
+    const taskComments = await db.all('SELECT * FROM comments WHERE taskId = ?', [req.params.taskId]);
+    res.json(taskComments);
+  } catch (error) {
+    console.error('Ошибка получения комментариев:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
   }
-  
-  const updatedComment = {
-    ...comments[commentIndex],
-    content: req.body.content,
-    updatedAt: moment().format()
-  };
-  comments[commentIndex] = updatedComment;
-  res.json(updatedComment);
 });
 
-app.delete('/api/comments/:id', (req, res) => {
-  const commentIndex = comments.findIndex(c => c.id === req.params.id);
-  if (commentIndex === -1) {
-    return res.status(404).json({ message: 'Комментарий не найден' });
+app.post('/api/tasks/:taskId/comments', authenticateToken, validation.commentValidation, async (req, res) => {
+  try {
+    const { content, authorId } = req.body;
+    const newCommentId = uuidv4();
+
+    await db.run(
+      'INSERT INTO comments (id, taskId, content, authorId) VALUES (?, ?, ?, ?)',
+      [newCommentId, req.params.taskId, content, authorId]
+    );
+
+    const newComment = await db.get('SELECT * FROM comments WHERE id = ?', [newCommentId]);
+    res.json(newComment);
+  } catch (error) {
+    console.error('Ошибка создания комментария:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
   }
-  
-  comments.splice(commentIndex, 1);
-  res.json({ message: 'Комментарий удален' });
+});
+
+app.put('/api/comments/:id', authenticateToken, validation.commentValidation, async (req, res) => {
+  try {
+    const comment = await db.get('SELECT * FROM comments WHERE id = ?', [req.params.id]);
+    if (!comment) {
+      return res.status(404).json({ message: 'Комментарий не найден' });
+    }
+
+    await db.run(
+      'UPDATE comments SET content = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+      [req.body.content, req.params.id]
+    );
+
+    const updatedComment = await db.get('SELECT * FROM comments WHERE id = ?', [req.params.id]);
+    res.json(updatedComment);
+  } catch (error) {
+    console.error('Ошибка обновления комментария:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+  }
+});
+
+app.delete('/api/comments/:id', authenticateToken, async (req, res) => {
+  try {
+    const comment = await db.get('SELECT * FROM comments WHERE id = ?', [req.params.id]);
+    if (!comment) {
+      return res.status(404).json({ message: 'Комментарий не найден' });
+    }
+
+    await db.run('DELETE FROM comments WHERE id = ?', [req.params.id]);
+    res.json({ message: 'Комментарий удален' });
+  } catch (error) {
+    console.error('Ошибка удаления комментария:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+  }
 });
 
 // Routes для проектов
-app.get('/api/projects', checkRole(['admin', 'manager', 'developer']), (req, res) => {
-  res.json(projects);
-});
-
-app.get('/api/projects/:id', checkRole(['admin', 'manager', 'developer']), (req, res) => {
-  const project = projects.find(p => p.id === req.params.id);
-  if (!project) {
-    return res.status(404).json({ message: 'Проект не найден' });
+app.get('/api/projects', authenticateToken, checkRole(['admin', 'manager', 'developer']), async (req, res) => {
+  try {
+    const projects = await db.all('SELECT * FROM projects');
+    res.json(projects);
+  } catch (error) {
+    console.error('Ошибка получения проектов:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
   }
-  res.json(project);
 });
 
-app.post('/api/projects', checkRole(['admin', 'manager']), logAction('Создание проекта'), (req, res) => {
-  const { name, description, startDate, endDate, status = 'active', managerId } = req.body;
-  const newProject = {
-    id: uuidv4(),
-    name,
-    description,
-    startDate,
-    endDate,
-    status,
-    managerId,
-    createdAt: moment().format(),
-    updatedAt: moment().format()
-  };
-  projects.push(newProject);
-  res.json(newProject);
-});
-
-app.put('/api/projects/:id', checkRole(['admin', 'manager']), logAction('Обновление проекта'), (req, res) => {
-  const projectIndex = projects.findIndex(p => p.id === req.params.id);
-  if (projectIndex === -1) {
-    return res.status(404).json({ message: 'Проект не найден' });
+app.get('/api/projects/:id', authenticateToken, checkRole(['admin', 'manager', 'developer']), async (req, res) => {
+  try {
+    const project = await db.get('SELECT * FROM projects WHERE id = ?', [req.params.id]);
+    if (!project) {
+      return res.status(404).json({ message: 'Проект не найден' });
+    }
+    res.json(project);
+  } catch (error) {
+    console.error('Ошибка получения проекта:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
   }
-  
-  const updatedProject = {
-    ...projects[projectIndex],
-    ...req.body,
-    updatedAt: moment().format()
-  };
-  projects[projectIndex] = updatedProject;
-  res.json(updatedProject);
 });
 
-app.delete('/api/projects/:id', checkRole(['admin']), logAction('Удаление проекта'), (req, res) => {
-  const projectIndex = projects.findIndex(p => p.id === req.params.id);
-  if (projectIndex === -1) {
-    return res.status(404).json({ message: 'Проект не найден' });
+app.post('/api/projects', authenticateToken, checkRole(['admin', 'manager']), logAction('Создание проекта'), validation.projectValidation, async (req, res) => {
+  try {
+    const { name, description, startDate, endDate, status = 'active', managerId } = req.body;
+    const newProjectId = uuidv4();
+
+    await db.run(
+      'INSERT INTO projects (id, name, description, startDate, endDate, status, managerId, progress) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [newProjectId, name, description, startDate, endDate, status, managerId, 0]
+    );
+
+    const newProject = await db.get('SELECT * FROM projects WHERE id = ?', [newProjectId]);
+    res.json(newProject);
+  } catch (error) {
+    console.error('Ошибка создания проекта:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
   }
-  
-  // Удаляем все задачи проекта
-  tasks = tasks.filter(task => task.projectId !== req.params.id);
-  projects.splice(projectIndex, 1);
-  res.json({ message: 'Проект удален' });
+});
+
+app.put('/api/projects/:id', authenticateToken, checkRole(['admin', 'manager']), logAction('Обновление проекта'), validation.projectValidation, async (req, res) => {
+  try {
+    const project = await db.get('SELECT * FROM projects WHERE id = ?', [req.params.id]);
+    if (!project) {
+      return res.status(404).json({ message: 'Проект не найден' });
+    }
+
+    const { name, description, startDate, endDate, status, managerId, progress } = req.body;
+
+    await db.run(
+      'UPDATE projects SET name = ?, description = ?, startDate = ?, endDate = ?, status = ?, managerId = ?, progress = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+      [
+        name || project.name,
+        description !== undefined ? description : project.description,
+        startDate || project.startDate,
+        endDate || project.endDate,
+        status || project.status,
+        managerId || project.managerId,
+        progress !== undefined ? progress : project.progress,
+        req.params.id
+      ]
+    );
+
+    const updatedProject = await db.get('SELECT * FROM projects WHERE id = ?', [req.params.id]);
+    res.json(updatedProject);
+  } catch (error) {
+    console.error('Ошибка обновления проекта:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+  }
+});
+
+app.delete('/api/projects/:id', authenticateToken, checkRole(['admin']), logAction('Удаление проекта'), async (req, res) => {
+  try {
+    const project = await db.get('SELECT * FROM projects WHERE id = ?', [req.params.id]);
+    if (!project) {
+      return res.status(404).json({ message: 'Проект не найден' });
+    }
+
+    // Удаляем все задачи проекта
+    await db.run('DELETE FROM tasks WHERE projectId = ?', [req.params.id]);
+
+    // Удаляем проект
+    await db.run('DELETE FROM projects WHERE id = ?', [req.params.id]);
+    res.json({ message: 'Проект удален' });
+  } catch (error) {
+    console.error('Ошибка удаления проекта:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+  }
 });
 
 // Routes для задач
-app.get('/api/tasks', (req, res) => {
-  const { projectId } = req.query;
-  let filteredTasks = tasks;
-  
-  if (projectId) {
-    filteredTasks = tasks.filter(task => task.projectId === projectId);
+app.get('/api/tasks', authenticateToken, async (req, res) => {
+  try {
+    const { projectId } = req.query;
+
+    let query = 'SELECT * FROM tasks';
+    let params = [];
+
+    if (projectId) {
+      query += ' WHERE projectId = ?';
+      params.push(projectId);
+    }
+
+    const tasks = await db.all(query, params);
+    res.json(tasks);
+  } catch (error) {
+    console.error('Ошибка получения задач:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
   }
-  
-  res.json(filteredTasks);
 });
 
-app.get('/api/tasks/:id', (req, res) => {
-  const task = tasks.find(t => t.id === req.params.id);
-  if (!task) {
-    return res.status(404).json({ message: 'Задача не найдена' });
+app.get('/api/tasks/:id', authenticateToken, async (req, res) => {
+  try {
+    const task = await db.get('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
+    if (!task) {
+      return res.status(404).json({ message: 'Задача не найдена' });
+    }
+    res.json(task);
+  } catch (error) {
+    console.error('Ошибка получения задачи:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
   }
-  res.json(task);
 });
 
-app.post('/api/tasks', (req, res) => {
-  const { title, description, priority = 'medium', status = 'todo', projectId, assigneeId, dueDate, parentTaskId } = req.body;
-  const newTask = {
-    id: uuidv4(),
-    title,
-    description,
-    priority,
-    status,
-    projectId,
-    assigneeId,
-    dueDate,
-    parentTaskId,
-    createdAt: moment().format(),
-    updatedAt: moment().format()
-  };
-  tasks.push(newTask);
-  res.json(newTask);
+app.post('/api/tasks', authenticateToken, validation.taskValidation, async (req, res) => {
+  try {
+    const { title, description, priority = 'medium', status = 'todo', projectId, assigneeId, dueDate, parentTaskId } = req.body;
+    const newTaskId = uuidv4();
+
+    await db.run(
+      'INSERT INTO tasks (id, title, description, priority, status, projectId, assigneeId, dueDate, parentTaskId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [newTaskId, title, description, priority, status, projectId, assigneeId, dueDate, parentTaskId]
+    );
+
+    const newTask = await db.get('SELECT * FROM tasks WHERE id = ?', [newTaskId]);
+    res.json(newTask);
+  } catch (error) {
+    console.error('Ошибка создания задачи:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+  }
 });
 
-app.put('/api/tasks/:id', (req, res) => {
-  const taskIndex = tasks.findIndex(t => t.id === req.params.id);
-  if (taskIndex === -1) {
-    return res.status(404).json({ message: 'Задача не найдена' });
+app.put('/api/tasks/:id', authenticateToken, validation.taskValidation, async (req, res) => {
+  try {
+    const task = await db.get('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
+    if (!task) {
+      return res.status(404).json({ message: 'Задача не найдена' });
+    }
+
+    const { title, description, priority, status, projectId, assigneeId, dueDate, parentTaskId } = req.body;
+
+    await db.run(
+      'UPDATE tasks SET title = ?, description = ?, priority = ?, status = ?, projectId = ?, assigneeId = ?, dueDate = ?, parentTaskId = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+      [
+        title || task.title,
+        description !== undefined ? description : task.description,
+        priority || task.priority,
+        status || task.status,
+        projectId !== undefined ? projectId : task.projectId,
+        assigneeId !== undefined ? assigneeId : task.assigneeId,
+        dueDate !== undefined ? dueDate : task.dueDate,
+        parentTaskId !== undefined ? parentTaskId : task.parentTaskId,
+        req.params.id
+      ]
+    );
+
+    const updatedTask = await db.get('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
+    res.json(updatedTask);
+  } catch (error) {
+    console.error('Ошибка обновления задачи:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
   }
-  
-  const updatedTask = {
-    ...tasks[taskIndex],
-    ...req.body,
-    updatedAt: moment().format()
-  };
-  tasks[taskIndex] = updatedTask;
-  res.json(updatedTask);
 });
 
 // Обновление статуса задачи (для Kanban)
-app.patch('/api/tasks/:id/status', (req, res) => {
-  const { status } = req.body;
-  const taskIndex = tasks.findIndex(t => t.id === req.params.id);
-  
-  if (taskIndex === -1) {
-    return res.status(404).json({ message: 'Задача не найдена' });
+app.patch('/api/tasks/:id/status', authenticateToken, validation.taskStatusValidation, async (req, res) => {
+  try {
+    const { status } = req.body;
+
+    const task = await db.get('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
+    if (!task) {
+      return res.status(404).json({ message: 'Задача не найдена' });
+    }
+
+    if (!['todo', 'in-progress', 'completed'].includes(status)) {
+      return res.status(400).json({ message: 'Неверный статус' });
+    }
+
+    await db.run(
+      'UPDATE tasks SET status = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+      [status, req.params.id]
+    );
+
+    const updatedTask = await db.get('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
+    res.json(updatedTask);
+  } catch (error) {
+    console.error('Ошибка обновления статуса задачи:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
   }
-  
-  if (!['todo', 'in-progress', 'completed'].includes(status)) {
-    return res.status(400).json({ message: 'Неверный статус' });
-  }
-  
-  tasks[taskIndex] = {
-    ...tasks[taskIndex],
-    status,
-    updatedAt: moment().format()
-  };
-  
-  res.json(tasks[taskIndex]);
 });
 
-app.delete('/api/tasks/:id', (req, res) => {
-  const taskIndex = tasks.findIndex(t => t.id === req.params.id);
-  if (taskIndex === -1) {
-    return res.status(404).json({ message: 'Задача не найдена' });
+app.delete('/api/tasks/:id', authenticateToken, async (req, res) => {
+  try {
+    const task = await db.get('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
+    if (!task) {
+      return res.status(404).json({ message: 'Задача не найдена' });
+    }
+
+    // Удаляем все комментарии к задаче
+    await db.run('DELETE FROM comments WHERE taskId = ?', [req.params.id]);
+
+    // Удаляем все подзадачи
+    await db.run('DELETE FROM tasks WHERE parentTaskId = ?', [req.params.id]);
+
+    // Удаляем саму задачу
+    await db.run('DELETE FROM tasks WHERE id = ?', [req.params.id]);
+
+    res.json({ message: 'Задача удалена' });
+  } catch (error) {
+    console.error('Ошибка удаления задачи:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
   }
-  
-  // Удаляем все подзадачи
-  tasks = tasks.filter(task => task.parentTaskId !== req.params.id);
-  tasks.splice(taskIndex, 1);
-  res.json({ message: 'Задача удалена' });
 });
 
 // Поиск
-app.get('/api/search', (req, res) => {
-  const { q: query, type } = req.query;
-  
-  if (!query || query.trim().length < 2) {
-    return res.json({ projects: [], tasks: [] });
-  }
-  
-  const searchTerm = query.toLowerCase().trim();
-  
-  // Поиск проектов
-  const matchingProjects = projects.filter(project => 
-    project.name.toLowerCase().includes(searchTerm) ||
-    project.description.toLowerCase().includes(searchTerm)
-  );
-  
-  // Поиск задач
-  const matchingTasks = tasks.filter(task => 
-    task.title.toLowerCase().includes(searchTerm) ||
-    task.description.toLowerCase().includes(searchTerm)
-  );
-  
-  // Если указан тип, фильтруем результат
-  if (type === 'projects') {
-    res.json({ projects: matchingProjects, tasks: [] });
-  } else if (type === 'tasks') {
-    res.json({ projects: [], tasks: matchingTasks });
-  } else {
+app.get('/api/search', authenticateToken, async (req, res) => {
+  try {
+    const { q: query, type } = req.query;
+
+    if (!query || query.trim().length < 2) {
+      return res.json({ projects: [], tasks: [] });
+    }
+
+    const searchTerm = `%${query.toLowerCase().trim()}%`;
+
+    let matchingProjects = [];
+    let matchingTasks = [];
+
+    // Поиск проектов
+    if (!type || type === 'projects') {
+      matchingProjects = await db.all(
+        'SELECT * FROM projects WHERE LOWER(name) LIKE ? OR LOWER(description) LIKE ?',
+        [searchTerm, searchTerm]
+      );
+    }
+
+    // Поиск задач
+    if (!type || type === 'tasks') {
+      matchingTasks = await db.all(
+        'SELECT * FROM tasks WHERE LOWER(title) LIKE ? OR LOWER(description) LIKE ?',
+        [searchTerm, searchTerm]
+      );
+    }
+
     res.json({ projects: matchingProjects, tasks: matchingTasks });
+  } catch (error) {
+    console.error('Ошибка поиска:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
   }
 });
 
 // Просроченные задачи
-app.get('/api/overdue-tasks', (req, res) => {
-  const now = new Date();
-  const overdueTasks = tasks.filter(task => {
-    if (!task.dueDate || task.status === 'completed') return false;
-    return new Date(task.dueDate) < now;
-  });
-  
-  res.json(overdueTasks);
+app.get('/api/overdue-tasks', authenticateToken, async (req, res) => {
+  try {
+    const now = moment().format('YYYY-MM-DD');
+    const overdueTasks = await db.all(
+      "SELECT * FROM tasks WHERE dueDate IS NOT NULL AND dueDate < ? AND status != 'completed'",
+      [now]
+    );
+    res.json(overdueTasks);
+  } catch (error) {
+    console.error('Ошибка получения просроченных задач:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+  }
 });
 
 // Задачи, истекающие сегодня
-app.get('/api/today-tasks', (req, res) => {
-  const today = moment().format('YYYY-MM-DD');
-  const todayTasks = tasks.filter(task => {
-    if (!task.dueDate || task.status === 'completed') return false;
-    return task.dueDate.startsWith(today);
-  });
-  
-  res.json(todayTasks);
+app.get('/api/today-tasks', authenticateToken, async (req, res) => {
+  try {
+    const today = moment().format('YYYY-MM-DD');
+    const todayTasks = await db.all(
+      "SELECT * FROM tasks WHERE dueDate = ? AND status != 'completed'",
+      [today]
+    );
+    res.json(todayTasks);
+  } catch (error) {
+    console.error('Ошибка получения задач на сегодня:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+  }
 });
 
 // Экспорт данных
-app.get('/api/export/projects', (req, res) => {
-  const csvHeader = 'ID,Название,Описание,Статус,Дата начала,Дата окончания,Менеджер,Создан,Обновлен\n';
-  const csvData = projects.map(project => {
-    const manager = users.find(u => u.id === project.managerId);
-    return [
-      project.id,
-      `"${project.name}"`,
-      `"${project.description || ''}"`,
-      project.status,
-      project.startDate ? moment(project.startDate).format('DD.MM.YYYY') : '',
-      project.endDate ? moment(project.endDate).format('DD.MM.YYYY') : '',
-      manager ? `"${manager.name}"` : '',
-      moment(project.createdAt).format('DD.MM.YYYY HH:mm'),
-      moment(project.updatedAt).format('DD.MM.YYYY HH:mm')
-    ].join(',');
-  }).join('\n');
-  
-  const csv = csvHeader + csvData;
-  
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename=projects_${moment().format('YYYY-MM-DD')}.csv`);
-  res.send('\ufeff' + csv); // BOM для правильного отображения кириллицы в Excel
+app.get('/api/export/projects', authenticateToken, async (req, res) => {
+  try {
+    const projects = await db.all('SELECT * FROM projects');
+    const users = await db.all('SELECT * FROM users');
+
+    const csvHeader = 'ID,Название,Описание,Статус,Дата начала,Дата окончания,Менеджер,Создан,Обновлен\n';
+    const csvData = projects.map(project => {
+      const manager = users.find(u => u.id === project.managerId);
+      return [
+        project.id,
+        `"${project.name}"`,
+        `"${project.description || ''}"`,
+        project.status,
+        project.startDate ? moment(project.startDate).format('DD.MM.YYYY') : '',
+        project.endDate ? moment(project.endDate).format('DD.MM.YYYY') : '',
+        manager ? `"${manager.name}"` : '',
+        moment(project.createdAt).format('DD.MM.YYYY HH:mm'),
+        moment(project.updatedAt).format('DD.MM.YYYY HH:mm')
+      ].join(',');
+    }).join('\n');
+
+    const csv = csvHeader + csvData;
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=projects_${moment().format('YYYY-MM-DD')}.csv`);
+    res.send('\ufeff' + csv); // BOM для правильного отображения кириллицы в Excel
+  } catch (error) {
+    console.error('Ошибка экспорта проектов:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+  }
 });
 
-app.get('/api/export/tasks', (req, res) => {
-  const csvHeader = 'ID,Название,Описание,Приоритет,Статус,Проект,Исполнитель,Срок,Создан,Обновлен\n';
-  const csvData = tasks.map(task => {
-    const project = projects.find(p => p.id === task.projectId);
-    const assignee = users.find(u => u.id === task.assigneeId);
-    return [
-      task.id,
-      `"${task.title}"`,
-      `"${task.description || ''}"`,
-      task.priority,
-      task.status,
-      project ? `"${project.name}"` : '',
-      assignee ? `"${assignee.name}"` : '',
-      task.dueDate ? moment(task.dueDate).format('DD.MM.YYYY') : '',
-      moment(task.createdAt).format('DD.MM.YYYY HH:mm'),
-      moment(task.updatedAt).format('DD.MM.YYYY HH:mm')
-    ].join(',');
-  }).join('\n');
-  
-  const csv = csvHeader + csvData;
-  
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename=tasks_${moment().format('YYYY-MM-DD')}.csv`);
-  res.send('\ufeff' + csv); // BOM для правильного отображения кириллицы в Excel
+app.get('/api/export/tasks', authenticateToken, async (req, res) => {
+  try {
+    const tasks = await db.all('SELECT * FROM tasks');
+    const projects = await db.all('SELECT * FROM projects');
+    const users = await db.all('SELECT * FROM users');
+
+    const csvHeader = 'ID,Название,Описание,Приоритет,Статус,Проект,Исполнитель,Срок,Создан,Обновлен\n';
+    const csvData = tasks.map(task => {
+      const project = projects.find(p => p.id === task.projectId);
+      const assignee = users.find(u => u.id === task.assigneeId);
+      return [
+        task.id,
+        `"${task.title}"`,
+        `"${task.description || ''}"`,
+        task.priority,
+        task.status,
+        project ? `"${project.name}"` : '',
+        assignee ? `"${assignee.name}"` : '',
+        task.dueDate ? moment(task.dueDate).format('DD.MM.YYYY') : '',
+        moment(task.createdAt).format('DD.MM.YYYY HH:mm'),
+        moment(task.updatedAt).format('DD.MM.YYYY HH:mm')
+      ].join(',');
+    }).join('\n');
+
+    const csv = csvHeader + csvData;
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=tasks_${moment().format('YYYY-MM-DD')}.csv`);
+    res.send('\ufeff' + csv); // BOM для правильного отображения кириллицы в Excel
+  } catch (error) {
+    console.error('Ошибка экспорта задач:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+  }
 });
 
-app.get('/api/export/all', (req, res) => {
-  const csvHeader = 'Тип,ID,Название,Описание,Статус,Приоритет,Проект,Исполнитель,Срок,Создан,Обновлен\n';
-  
-  // Добавляем проекты
-  const projectsData = projects.map(project => {
-    const manager = users.find(u => u.id === project.managerId);
-    return [
-      'Проект',
-      project.id,
-      `"${project.name}"`,
-      `"${project.description || ''}"`,
-      project.status,
-      '',
-      '',
-      manager ? `"${manager.name}"` : '',
-      project.endDate ? moment(project.endDate).format('DD.MM.YYYY') : '',
-      moment(project.createdAt).format('DD.MM.YYYY HH:mm'),
-      moment(project.updatedAt).format('DD.MM.YYYY HH:mm')
-    ].join(',');
-  });
-  
-  // Добавляем задачи
-  const tasksData = tasks.map(task => {
-    const project = projects.find(p => p.id === task.projectId);
-    const assignee = users.find(u => u.id === task.assigneeId);
-    return [
-      'Задача',
-      task.id,
-      `"${task.title}"`,
-      `"${task.description || ''}"`,
-      task.status,
-      task.priority,
-      project ? `"${project.name}"` : '',
-      assignee ? `"${assignee.name}"` : '',
-      task.dueDate ? moment(task.dueDate).format('DD.MM.YYYY') : '',
-      moment(task.createdAt).format('DD.MM.YYYY HH:mm'),
-      moment(task.updatedAt).format('DD.MM.YYYY HH:mm')
-    ].join(',');
-  });
-  
-  const csv = csvHeader + projectsData.join('\n') + '\n' + tasksData.join('\n');
-  
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename=all_data_${moment().format('YYYY-MM-DD')}.csv`);
-  res.send('\ufeff' + csv); // BOM для правильного отображения кириллицы в Excel
+app.get('/api/export/all', authenticateToken, async (req, res) => {
+  try {
+    const projects = await db.all('SELECT * FROM projects');
+    const tasks = await db.all('SELECT * FROM tasks');
+    const users = await db.all('SELECT * FROM users');
+
+    const csvHeader = 'Тип,ID,Название,Описание,Статус,Приоритет,Проект,Исполнитель,Срок,Создан,Обновлен\n';
+
+    // Добавляем проекты
+    const projectsData = projects.map(project => {
+      const manager = users.find(u => u.id === project.managerId);
+      return [
+        'Проект',
+        project.id,
+        `"${project.name}"`,
+        `"${project.description || ''}"`,
+        project.status,
+        '',
+        '',
+        manager ? `"${manager.name}"` : '',
+        project.endDate ? moment(project.endDate).format('DD.MM.YYYY') : '',
+        moment(project.createdAt).format('DD.MM.YYYY HH:mm'),
+        moment(project.updatedAt).format('DD.MM.YYYY HH:mm')
+      ].join(',');
+    });
+
+    // Добавляем задачи
+    const tasksData = tasks.map(task => {
+      const project = projects.find(p => p.id === task.projectId);
+      const assignee = users.find(u => u.id === task.assigneeId);
+      return [
+        'Задача',
+        task.id,
+        `"${task.title}"`,
+        `"${task.description || ''}"`,
+        task.status,
+        task.priority,
+        project ? `"${project.name}"` : '',
+        assignee ? `"${assignee.name}"` : '',
+        task.dueDate ? moment(task.dueDate).format('DD.MM.YYYY') : '',
+        moment(task.createdAt).format('DD.MM.YYYY HH:mm'),
+        moment(task.updatedAt).format('DD.MM.YYYY HH:mm')
+      ].join(',');
+    });
+
+    const csv = csvHeader + projectsData.join('\n') + '\n' + tasksData.join('\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=all_data_${moment().format('YYYY-MM-DD')}.csv`);
+    res.send('\ufeff' + csv); // BOM для правильного отображения кириллицы в Excel
+  } catch (error) {
+    console.error('Ошибка экспорта всех данных:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+  }
 });
 
 // Статистика
-app.get('/api/stats', (req, res) => {
-  const totalProjects = projects.length;
-  const activeProjects = projects.filter(p => p.status === 'active').length;
-  const completedProjects = projects.filter(p => p.status === 'completed').length;
-  
-  const totalTasks = tasks.length;
-  const completedTasks = tasks.filter(t => t.status === 'completed').length;
-  const inProgressTasks = tasks.filter(t => t.status === 'in-progress').length;
-  const todoTasks = tasks.filter(t => t.status === 'todo').length;
-  
-  res.json({
-    projects: {
-      total: totalProjects,
-      active: activeProjects,
-      completed: completedProjects
-    },
-    tasks: {
-      total: totalTasks,
-      completed: completedTasks,
-      inProgress: inProgressTasks,
-      todo: todoTasks
-    }
-  });
+app.get('/api/stats', authenticateToken, async (req, res) => {
+  try {
+    const projects = await db.all('SELECT * FROM projects');
+    const tasks = await db.all('SELECT * FROM tasks');
+
+    const totalProjects = projects.length;
+    const activeProjects = projects.filter(p => p.status === 'active').length;
+    const completedProjects = projects.filter(p => p.status === 'completed').length;
+
+    const totalTasks = tasks.length;
+    const completedTasks = tasks.filter(t => t.status === 'completed').length;
+    const inProgressTasks = tasks.filter(t => t.status === 'in-progress').length;
+    const todoTasks = tasks.filter(t => t.status === 'todo').length;
+
+    res.json({
+      projects: {
+        total: totalProjects,
+        active: activeProjects,
+        completed: completedProjects
+      },
+      tasks: {
+        total: totalTasks,
+        completed: completedTasks,
+        inProgress: inProgressTasks,
+        todo: todoTasks
+      }
+    });
+  } catch (error) {
+    console.error('Ошибка получения статистики:', error);
+    res.status(500).json({ message: 'Внутренняя ошибка сервера' });
+  }
 });
 
 // Маршрут для React приложения (должен быть последним)
