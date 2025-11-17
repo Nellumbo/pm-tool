@@ -66,15 +66,21 @@ const getTodayTasks = (req, res, tasks) => {
  */
 const getStats = (req, res, projects, tasks, users) => {
   const stats = {
-    totalProjects: projects.length,
-    activeProjects: projects.filter(p => p.status === 'active').length,
-    completedProjects: projects.filter(p => p.status === 'completed').length,
-    totalTasks: tasks.length,
-    todoTasks: tasks.filter(t => t.status === 'todo').length,
-    inProgressTasks: tasks.filter(t => t.status === 'in-progress').length,
-    completedTasks: tasks.filter(t => t.status === 'completed').length,
-    highPriorityTasks: tasks.filter(t => t.priority === 'high').length,
-    totalUsers: users.length
+    projects: {
+      total: projects.length,
+      active: projects.filter(p => p.status === 'active').length,
+      completed: projects.filter(p => p.status === 'completed').length
+    },
+    tasks: {
+      total: tasks.length,
+      todo: tasks.filter(t => t.status === 'todo').length,
+      inProgress: tasks.filter(t => t.status === 'in-progress').length,
+      completed: tasks.filter(t => t.status === 'completed').length,
+      highPriority: tasks.filter(t => t.priority === 'high').length
+    },
+    users: {
+      total: users.length
+    }
   };
 
   res.json(stats);

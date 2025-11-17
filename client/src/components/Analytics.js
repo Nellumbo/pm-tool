@@ -37,7 +37,27 @@ const Analytics = () => {
         usersData = [];
       }
 
-      setStats(statsData);
+      // Проверка структуры и преобразование если нужно
+      if (statsData && !statsData.projects) {
+        // Если пришла старая структура - преобразуем
+        const normalizedStats = {
+          projects: {
+            total: statsData.totalProjects || 0,
+            active: statsData.activeProjects || 0,
+            completed: statsData.completedProjects || 0
+          },
+          tasks: {
+            total: statsData.totalTasks || 0,
+            todo: statsData.todoTasks || 0,
+            inProgress: statsData.inProgressTasks || 0,
+            completed: statsData.completedTasks || 0
+          }
+        };
+        setStats(normalizedStats);
+      } else {
+        setStats(statsData);
+      }
+
       setProjects(projectsData);
       setTasks(tasksData);
       setUsers(usersData);

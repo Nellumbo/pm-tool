@@ -34,8 +34,10 @@ export const AuthProvider = ({ children }) => {
   const verifyToken = async (tokenToVerify) => {
     try {
       const response = await fetch('/api/auth/verify', {
+        method: 'POST',
         headers: {
-          'Authorization': `Bearer ${tokenToVerify}`
+          'Authorization': `Bearer ${tokenToVerify}`,
+          'Content-Type': 'application/json'
         }
       });
 

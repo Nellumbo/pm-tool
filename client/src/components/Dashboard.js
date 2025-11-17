@@ -24,11 +24,55 @@ const Dashboard = () => {
         fetch('/api/tasks')
       ]);
 
+      // Проверяем статус ответов
+      if (!statsRes.ok) {
+        const text = await statsRes.text();
+        console.error('Ошибка /api/stats:', statsRes.status, text.substring(0, 200));
+        throw new Error(`HTTP error! status: ${statsRes.status}`);
+      }
+      if (!projectsRes.ok) {
+        const text = await projectsRes.text();
+        console.error('Ошибка /api/projects:', projectsRes.status, text.substring(0, 200));
+        throw new Error(`HTTP error! status: ${projectsRes.status}`);
+      }
+      if (!tasksRes.ok) {
+        const text = await tasksRes.text();
+        console.error('Ошибка /api/tasks:', tasksRes.status, text.substring(0, 200));
+        throw new Error(`HTTP error! status: ${tasksRes.status}`);
+      }
+
       const statsData = await statsRes.json();
       const projectsData = await projectsRes.json();
       const tasksData = await tasksRes.json();
 
-      setStats(statsData);
+      console.log('Получены данные stats:', statsData);
+      console.log('JSON stats:', JSON.stringify(statsData, null, 2));
+      console.log('Получены данные projects:', projectsData);
+      console.log('Получены данные tasks:', tasksData);
+
+      // Проверка структуры и преобразование если нужно
+      if (statsData && !statsData.projects) {
+        // Если пришла старая структура - преобразуем
+        console.warn('Получена старая структура stats, преобразую...');
+        const normalizedStats = {
+          projects: {
+            total: statsData.totalProjects || 0,
+            active: statsData.activeProjects || 0,
+            completed: statsData.completedProjects || 0
+          },
+          tasks: {
+            total: statsData.totalTasks || 0,
+            todo: statsData.todoTasks || 0,
+            inProgress: statsData.inProgressTasks || 0,
+            completed: statsData.completedTasks || 0
+          }
+        };
+        console.log('Нормализованная структура:', normalizedStats);
+        setStats(normalizedStats);
+      } else {
+        setStats(statsData);
+      }
+
       setRecentProjects(projectsData.slice(0, 5));
       setRecentTasks(tasksData.slice(0, 10));
     } catch (error) {
