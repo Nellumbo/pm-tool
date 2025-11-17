@@ -47,11 +47,42 @@ const login = async (req, res, users) => {
 };
 
 /**
- * Регистрация нового пользователя
+ * Регистрация нового пользователя (требуется инвайт-код)
  */
-const register = async (req, res, users) => {
+const register = async (req, res, users, invites) => {
   try {
-    const { name, email, password, role = 'developer', department, position } = req.body;
+    const { name, email, password, inviteCode, department, position } = req.body;
+    const moment = require('moment');
+
+    // ОБЯЗАТЕЛЬНАЯ проверка инвайт-кода
+    if (!inviteCode) {
+      return res.status(400).json({
+        message: 'Для регистрации требуется инвайт-код. Обратитесь к администратору.'
+      });
+    }
+
+    // Находим инвайт-код
+    const invite = invites.find(i => i.code === inviteCode);
+
+    if (!invite) {
+      return res.status(404).json({
+        message: 'Инвайт-код не найден. Проверьте правильность кода.'
+      });
+    }
+
+    // Проверка: инвайт уже использован
+    if (!invite.isActive || invite.usedBy) {
+      return res.status(400).json({
+        message: 'Этот инвайт-код уже использован'
+      });
+    }
+
+    // Проверка: истек срок действия
+    if (moment().isAfter(moment(invite.expiresAt))) {
+      return res.status(400).json({
+        message: 'Срок действия инвайт-кода истек'
+      });
+    }
 
     // Проверяем, существует ли пользователь
     const existingUser = users.find(u => u.email === email);
@@ -62,13 +93,13 @@ const register = async (req, res, users) => {
     // Хешируем пароль
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Создаем нового пользователя
+    // Создаем нового пользователя с ролью из инвайта
     const newUser = {
       id: uuidv4(),
       name,
       email,
       password: hashedPassword,
-      role,
+      role: invite.role, // ← РОЛЬ БЕРЕТСЯ ИЗ ИНВАЙТА!
       department: department || '',
       position: position || '',
       createdAt: new Date().toISOString(),
@@ -76,6 +107,11 @@ const register = async (req, res, users) => {
     };
 
     users.push(newUser);
+
+    // Помечаем инвайт как использованный
+    invite.usedBy = newUser.id;
+    invite.usedAt = new Date().toISOString();
+    invite.isActive = false;
 
     // Создаем JWT токен
     const token = jwt.sign(

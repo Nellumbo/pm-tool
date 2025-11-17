@@ -1,4 +1,5 @@
 const moment = require('moment');
+const { v4: uuidv4 } = require('uuid');
 
 /**
  * Seed данные для демонстрации приложения
@@ -307,10 +308,59 @@ const templates = [
   }
 ];
 
+// Инвайт-коды для регистрации
+const invites = [
+  {
+    id: uuidv4(),
+    code: 'ADMIN-2024-DEMO',
+    role: 'admin',
+    createdBy: '1', // Создан администратором
+    createdAt: moment().subtract(7, 'days').format(),
+    expiresAt: moment().add(30, 'days').format(),
+    usedBy: null,
+    usedAt: null,
+    isActive: true
+  },
+  {
+    id: uuidv4(),
+    code: 'MANAGER-INVITE-001',
+    role: 'manager',
+    createdBy: '1',
+    createdAt: moment().subtract(5, 'days').format(),
+    expiresAt: moment().add(60, 'days').format(),
+    usedBy: null,
+    usedAt: null,
+    isActive: true
+  },
+  {
+    id: uuidv4(),
+    code: 'DEV-TEAM-2024',
+    role: 'developer',
+    createdBy: '2', // Создан менеджером
+    createdAt: moment().subtract(3, 'days').format(),
+    expiresAt: moment().add(90, 'days').format(),
+    usedBy: null,
+    usedAt: null,
+    isActive: true
+  },
+  {
+    id: uuidv4(),
+    code: 'USED-CODE-EXAMPLE',
+    role: 'developer',
+    createdBy: '1',
+    createdAt: moment().subtract(10, 'days').format(),
+    expiresAt: moment().add(20, 'days').format(),
+    usedBy: '3', // Использован разработчиком
+    usedAt: moment().subtract(8, 'days').format(),
+    isActive: false
+  }
+];
+
 module.exports = {
   projects,
   tasks,
   comments,
   users,
-  templates
+  templates,
+  invites
 };

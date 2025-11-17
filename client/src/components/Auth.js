@@ -12,7 +12,7 @@ const Auth = () => {
     name: '',
     email: '',
     password: '',
-    role: 'developer',
+    inviteCode: '',
     department: '',
     position: ''
   });
@@ -161,17 +161,20 @@ const Auth = () => {
           {!isLogin && (
             <>
               <div className="form-group">
-                <label>Роль</label>
-                <select
-                  name="role"
-                  value={formData.role}
+                <label>Инвайт-код *</label>
+                <input
+                  type="text"
+                  name="inviteCode"
+                  value={formData.inviteCode}
                   onChange={handleInputChange}
+                  required={!isLogin}
                   className="form-control"
-                >
-                  <option value="developer">Разработчик</option>
-                  <option value="manager">Менеджер</option>
-                  <option value="admin">Администратор</option>
-                </select>
+                  placeholder="Введите инвайт-код"
+                  style={{fontFamily: 'monospace', fontWeight: 'bold'}}
+                />
+                <small className="form-hint">
+                  🔒 Для регистрации требуется инвайт-код. Обратитесь к администратору.
+                </small>
               </div>
 
               <div className="form-group">
@@ -182,7 +185,7 @@ const Auth = () => {
                   value={formData.department}
                   onChange={handleInputChange}
                   className="form-control"
-                  placeholder="Введите отдел"
+                  placeholder="Введите отдел (опционально)"
                 />
               </div>
 
@@ -194,7 +197,7 @@ const Auth = () => {
                   value={formData.position}
                   onChange={handleInputChange}
                   className="form-control"
-                  placeholder="Введите должность"
+                  placeholder="Введите должность (опционально)"
                 />
               </div>
             </>
@@ -215,10 +218,12 @@ const Auth = () => {
           </button>
         </form>
 
-        {/* Демо-аккаунты */}
+        {/* Демо-аккаунты и инвайт-коды */}
         <div className="demo-accounts">
-          <h4>Демо-аккаунты для тестирования:</h4>
-          <div className="demo-list">
+          {isLogin ? (
+            <>
+              <h4>Демо-аккаунты для тестирования:</h4>
+              <div className="demo-list">
             <div className="demo-item" onClick={() => setFormData({...formData, email: 'admin@example.com', password: 'admin123'})}>
               {getRoleIcon('admin')}
               <div>
@@ -241,6 +246,38 @@ const Auth = () => {
               </div>
             </div>
           </div>
+            </>
+          ) : (
+            <>
+              <h4>Демо инвайт-коды для тестирования:</h4>
+              <div className="demo-list">
+                <div className="demo-item" onClick={() => setFormData({...formData, inviteCode: 'ADMIN-2024-DEMO'})}>
+                  {getRoleIcon('admin')}
+                  <div>
+                    <strong>Администратор</strong>
+                    <code style={{fontSize: '0.9rem'}}>ADMIN-2024-DEMO</code>
+                  </div>
+                </div>
+                <div className="demo-item" onClick={() => setFormData({...formData, inviteCode: 'MANAGER-INVITE-001'})}>
+                  {getRoleIcon('manager')}
+                  <div>
+                    <strong>Менеджер</strong>
+                    <code style={{fontSize: '0.9rem'}}>MANAGER-INVITE-001</code>
+                  </div>
+                </div>
+                <div className="demo-item" onClick={() => setFormData({...formData, inviteCode: 'DEV-TEAM-2024'})}>
+                  {getRoleIcon('developer')}
+                  <div>
+                    <strong>Разработчик</strong>
+                    <code style={{fontSize: '0.9rem'}}>DEV-TEAM-2024</code>
+                  </div>
+                </div>
+              </div>
+              <p style={{fontSize: '0.85rem', color: '#666', marginTop: '1rem', textAlign: 'center'}}>
+                💡 Нажмите на код чтобы автоматически вставить его в форму
+              </p>
+            </>
+          )}
         </div>
       </div>
 

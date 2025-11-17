@@ -8,7 +8,7 @@ require('dotenv').config();
 const seedData = require('./seeds/testData');
 
 // Инициализация данных (в реальном приложении это будет база данных)
-let { projects, tasks, comments, users, templates } = seedData;
+let { projects, tasks, comments, users, templates, invites } = seedData;
 
 // Создание Express приложения
 const app = express();
@@ -25,11 +25,12 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // Импорт и подключение routes
-const authRoutes = require('./routes/auth')(users);
+const authRoutes = require('./routes/auth')(users, invites);
 const projectsRoutes = require('./routes/projects')(projects, tasks);
 const tasksRoutes = require('./routes/tasks')(tasks, comments);
 const commentsRoutes = require('./routes/comments')(comments);
 const usersRoutes = require('./routes/users')(users);
+const invitesRoutes = require('./routes/invites')(invites, users);
 const utilsRoutes = require('./routes/utils')(projects, tasks, users, templates);
 
 // Подключение routes
@@ -38,6 +39,7 @@ app.use('/api/projects', projectsRoutes);
 app.use('/api/tasks', tasksRoutes);
 app.use('/api/comments', commentsRoutes);
 app.use('/api/users', usersRoutes);
+app.use('/api/invites', invitesRoutes);
 app.use('/api', utilsRoutes);
 
 // Обработка React routing в production

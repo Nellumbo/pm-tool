@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
-import { Calendar, Plus, Folder, CheckSquare, Users, BarChart3, Search, Download, Kanban, TrendingUp, Settings, LogOut } from 'lucide-react';
+import { Calendar, Plus, Folder, CheckSquare, Users, BarChart3, Search, Download, Kanban, TrendingUp, Settings, LogOut, Shield } from 'lucide-react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Dashboard from './components/Dashboard';
 import Projects from './components/Projects';
@@ -9,6 +9,7 @@ import CalendarView from './components/CalendarView';
 import KanbanView from './components/KanbanView';
 import Analytics from './components/Analytics';
 import UserManagement from './components/UserManagement';
+import InviteManager from './components/InviteManager';
 import ProjectDetail from './components/ProjectDetail';
 import SearchBar from './components/SearchBar';
 import NotificationCenter from './components/NotificationCenter';
@@ -54,10 +55,11 @@ const AppContent = () => {
     { id: 'kanban', label: 'Kanban', icon: Kanban, path: '/kanban' },
     { id: 'analytics', label: 'Аналитика', icon: TrendingUp, path: '/analytics' },
     { id: 'users', label: 'Пользователи', icon: Settings, path: '/users' },
+    { id: 'invites', label: 'Инвайт-коды', icon: Shield, path: '/invites' },
     { id: 'calendar', label: 'Календарь', icon: Calendar, path: '/calendar' }
   ].filter(item => {
     // Фильтруем навигацию по ролям
-    if (item.id === 'users') {
+    if (item.id === 'users' || item.id === 'invites') {
       return user.role === 'admin' || user.role === 'manager';
     }
     return true;
@@ -137,6 +139,7 @@ const AppContent = () => {
               <Route path="/kanban" element={<KanbanView />} />
               <Route path="/analytics" element={<Analytics />} />
               <Route path="/users" element={<UserManagement />} />
+              <Route path="/invites" element={<InviteManager />} />
               <Route path="/calendar" element={<CalendarView />} />
             </Routes>
           </div>
